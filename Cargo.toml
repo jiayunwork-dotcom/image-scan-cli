@@ -1,0 +1,62 @@
+[package]
+name = "image-scan-cli"
+version = "0.1.0"
+edition = "2021"
+authors = ["Image Scan CLI Team"]
+description = "Container image security vulnerability scanner and SBOM generator"
+license = "MIT"
+
+[[bin]]
+name = "image-scan"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.36", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+reqwest = { version = "0.12", features = ["json", "stream", "rustls-tls"], default-features = false }
+url = "2.5"
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+tar = "0.4"
+flate2 = "1.0"
+zstd = "0.13"
+walkdir = "2.5"
+regex = "1.10"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.7", features = ["v4", "serde"] }
+colored = "2.1"
+tabled = "0.15"
+indicatif = "0.17"
+parking_lot = "0.12"
+dashmap = "6.0"
+rayon = "1.10"
+semver = { version = "1.0", features = ["serde"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "chrono", "uuid", "macros"] }
+quick-xml = { version = "0.31", features = ["serialize"] }
+roxmltree = "0.19"
+futures = "0.3"
+urlencoding = "2.1"
+toml = "0.8"
+env_logger = "0.11"
+log = "0.4"
+dotenvy = "0.15"
+dirs = "5.0"
+tempfile = "3.10"
+dialoguer = "0.11"
+console = "0.15"
+num_cpus = "1.16"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
