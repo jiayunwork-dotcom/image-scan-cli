@@ -521,249 +521,277 @@ pub fn format_html(
 ) -> String {
     let vulns_json = serde_json::to_string(&result.vulnerabilities).unwrap_or_default();
     let packages_json = serde_json::to_string(&result.packages).unwrap_or_default();
-    let _summary_json = serde_json::to_string(summary).unwrap_or_default();
     let suggestions_json = serde_json::to_string(suggestions).unwrap_or_default();
 
-    let total_vulns = summary.total_vulnerabilities;
     let cr = summary.critical_count;
     let hi = summary.high_count;
     let me = summary.medium_count;
     let lo = summary.low_count;
+    let total_vulns = summary.total_vulnerabilities;
 
     format!(
-        r#"<!DOCTYPE html>
+        r##"<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Image Scan Report - {name}:{tag}</title>
 <style>
-  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; color: #333; }}
-  .container {{ max-width: 1400px; margin: 0 auto; padding: 20px; }}
-  header {{ background: linear-gradient(135deg, #1a365d 0%, #2c5282 100%); color: white; padding: 30px; border-radius: 12px; margin-bottom: 24px; }}
-  h1 {{ font-size: 28px; margin-bottom: 8px; }}
-  .subtitle {{ opacity: 0.8; font-size: 14px; }}
-  .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }}
-  .card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); }}
-  .card h3 {{ font-size: 13px; text-transform: uppercase; color: #718096; margin-bottom: 8px; }}
-  .card .value {{ font-size: 32px; font-weight: 700; }}
-  .critical {{ color: #e53e3e; }}
-  .high {{ color: #dd6b20; }}
-  .medium {{ color: #d69e2e; }}
-  .low {{ color: #4a5568; }}
-  .info {{ color: #2b6cb0; }}
-  .success {{ color: #38a169; }}
-  .table-card {{ background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.06); margin-bottom: 24px; }}
-  .section-title {{ font-size: 18px; font-weight: 600; margin-bottom: 16px; padding-bottom: 10px; border-bottom: 2px solid #e2e8f0; }}
-  input[type="search"] {{ width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; margin-bottom: 16px; }}
-  .filter-row {{ display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }}
-  .filter-btn {{ padding: 6px 14px; border: 1px solid #e2e8f0; background: white; border-radius: 6px; cursor: pointer; font-size: 13px; transition: all 0.2s; }}
-  .filter-btn:hover {{ background: #f0f4f8; }}
-  .filter-btn.active {{ background: #2b6cb0; color: white; border-color: #2b6cb0; }}
-  table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
-  th, td {{ padding: 10px 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
-  th {{ background: #f7fafc; font-weight: 600; color: #4a5568; position: sticky; top: 0; }}
-  tr:hover {{ background: #f7fafc; }}
-  .badge {{ display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }}
-  .badge-critical {{ background: #fed7d7; color: #c53030; }}
-  .badge-high {{ background: #feebc8; color: #c05621; }}
-  .badge-medium {{ background: #fefcbf; color: #975a16; }}
-  .badge-low {{ background: #e2e8f0; color: #4a5568; }}
-  .info-grid {{ display: grid; grid-template-columns: 140px 1fr; gap: 8px; font-size: 14px; }}
-  .info-label {{ color: #718096; }}
-  .progress-bar {{ height: 24px; background: #edf2f7; border-radius: 6px; overflow: hidden; }}
-  .progress-fill {{ height: 100%; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; font-weight: 600; }}
-  details {{ margin-bottom: 12px; }}
-  summary {{ cursor: pointer; padding: 10px; background: #f7fafc; border-radius: 6px; font-weight: 500; }}
-  summary:hover {{ background: #edf2f7; }}
-  .hidden {{ display: none !important; }}
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}}
+.container{{max-width:1400px;margin:0 auto;padding:24px}}
+.summary-card{{background:linear-gradient(135deg,#1e293b 0%,#334155 100%);border-radius:16px;padding:28px 32px;margin-bottom:28px;border:1px solid #475569}}
+.summary-card h1{{font-size:24px;font-weight:700;margin-bottom:4px}}
+.summary-card .meta{{font-size:13px;color:#94a3b8;margin-bottom:20px}}
+.summary-stats{{display:flex;flex-wrap:wrap;gap:20px;align-items:center}}
+.stat-item{{display:flex;align-items:center;gap:8px;font-size:15px}}
+.stat-item .label{{color:#94a3b8;font-size:13px}}
+.stat-item .value{{font-weight:700;font-size:20px}}
+.dot{{width:12px;height:12px;border-radius:50%;display:inline-block;flex-shrink:0}}
+.dot-critical{{background:#ef4444;box-shadow:0 0 8px rgba(239,68,68,0.5)}}
+.dot-high{{background:#f97316;box-shadow:0 0 8px rgba(249,115,22,0.5)}}
+.dot-medium{{background:#eab308;box-shadow:0 0 8px rgba(234,179,8,0.5)}}
+.dot-low{{background:#6b7280;box-shadow:0 0 8px rgba(107,114,128,0.5)}}
+.tabs{{display:flex;gap:0;margin-bottom:0}}
+.tab-btn{{padding:12px 28px;background:#1e293b;color:#94a3b8;border:1px solid #334155;border-bottom:none;cursor:pointer;font-size:14px;font-weight:500;transition:all .2s}}
+.tab-btn:first-child{{border-radius:10px 0 0 0}}
+.tab-btn:last-child{{border-radius:0 10px 0 0}}
+.tab-btn.active{{background:#1e293b;color:#e2e8f0;border-color:#3b82f6;box-shadow:inset 0 2px 0 #3b82f6}}
+.tab-content{{display:none;background:#1e293b;border:1px solid #334155;border-radius:0 0 12px 12px;padding:20px}}
+.tab-content.active{{display:block}}
+.toolbar{{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-bottom:16px}}
+.search-box{{flex:1;min-width:200px;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:14px;outline:none}}
+.search-box:focus{{border-color:#3b82f6}}
+.search-box::placeholder{{color:#64748b}}
+.sev-filters{{display:flex;gap:6px;flex-wrap:wrap}}
+.sev-btn{{padding:6px 14px;border-radius:6px;border:1px solid #334155;background:#0f172a;color:#94a3b8;cursor:pointer;font-size:12px;font-weight:600;transition:all .2s;user-select:none}}
+.sev-btn:hover{{border-color:#64748b}}
+.sev-btn.sel-critical{{background:#7f1d1d;border-color:#ef4444;color:#fca5a5}}
+.sev-btn.sel-high{{background:#7c2d12;border-color:#f97316;color:#fdba74}}
+.sev-btn.sel-medium{{background:#713f12;border-color:#eab308;color:#fde047}}
+.sev-btn.sel-low{{background:#374151;border-color:#6b7280;color:#d1d5db}}
+table{{width:100%;border-collapse:collapse;font-size:13px}}
+thead th{{position:sticky;top:0;background:#0f172a;color:#94a3b8;font-weight:600;text-align:left;padding:10px 12px;border-bottom:1px solid #334155;cursor:pointer;user-select:none;white-space:nowrap}}
+thead th:hover{{color:#e2e8f0}}
+thead th .sort-arrow{{margin-left:4px;font-size:10px;opacity:.4}}
+thead th.sorted .sort-arrow{{opacity:1;color:#3b82f6}}
+tbody td{{padding:10px 12px;border-bottom:1px solid #1e293b;vertical-align:middle}}
+tbody tr:hover{{background:#1e293b80}}
+.table-wrap{{overflow:auto;max-height:520px;border-radius:8px}}
+.badge{{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.3px}}
+.badge-critical{{background:#991b1b;color:#fecaca}}
+.badge-high{{background:#9a3412;color:#fed7aa}}
+.badge-medium{{background:#854d0e;color:#fef08a}}
+.badge-low{{background:#374151;color:#d1d5db}}
+.badge-unknown{{background:#1f2937;color:#9ca3af}}
+.fix-ver{{color:#4ade80;font-weight:600}}
+.no-fix{{color:#64748b}}
+.truncate{{max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:help}}
+.section{{background:#1e293b;border:1px solid #334155;border-radius:12px;margin-bottom:28px;overflow:hidden}}
+.section-header{{padding:20px 24px;border-bottom:1px solid #334155}}
+.section-header h2{{font-size:18px;font-weight:600}}
+.fix-section{{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:24px;margin-bottom:28px}}
+.fix-section h2{{font-size:18px;font-weight:600;margin-bottom:16px}}
+.fix-group{{margin-bottom:16px;padding:12px 16px;background:#0f172a;border-radius:8px;border-left:3px solid #3b82f6}}
+.fix-group .pkg-name{{font-weight:700;font-size:15px;margin-bottom:6px}}
+.fix-group .upgrade{{color:#4ade80;margin-bottom:4px}}
+.fix-group .cve-list{{color:#94a3b8;font-size:12px}}
+.no-results{{text-align:center;padding:40px;color:#64748b}}
+.pkg-search{{width:100%;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:14px;outline:none;margin-bottom:16px}}
+.pkg-search:focus{{border-color:#3b82f6}}
+.pkg-search::placeholder{{color:#64748b}}
+footer{{text-align:center;padding:20px;color:#475569;font-size:12px}}
 </style>
 </head>
 <body>
 <div class="container">
-  <header>
-    <h1>🔒 Container Image Security Scan Report</h1>
-    <div class="subtitle">Image: <strong>{name}:{tag}</strong> | Scanned: {time} | Platform: {arch}</div>
-  </header>
-
-  <div class="grid">
-    <div class="card"><h3>Total Packages</h3><div class="value info">{packages}</div></div>
-    <div class="card"><h3>Total Vulnerabilities</h3><div class="value {vuln_class}">{total}</div></div>
-    <div class="card"><h3>Critical</h3><div class="value critical">{cr}</div></div>
-    <div class="card"><h3>High</h3><div class="value high">{hi}</div></div>
-    <div class="card"><h3>Medium</h3><div class="value medium">{me}</div></div>
-    <div class="card"><h3>Low</h3><div class="value low">{lo}</div></div>
-    <div class="card"><h3>Fixable</h3><div class="value success">{fixable}</div></div>
-    <div class="card"><h3>Scan ID</h3><div class="value info" style="font-size:12px">{scan_id}</div></div>
-  </div>
-
-  <div class="table-card">
-    <div class="section-title">📋 Image Details</div>
-    <div class="info-grid">
-      <div class="info-label">Image Name</div><div>{name}</div>
-      <div class="info-label">Tag</div><div>{tag}</div>
-      <div class="info-label">Digest</div><div>{digest}</div>
-      <div class="info-label">Platform</div><div>{os}/{arch}</div>
-      <div class="info-label">Layers</div><div>{layers}</div>
-      <div class="info-label">Scan Time</div><div>{time}</div>
+  <div class="summary-card">
+    <h1>🔒 {name}:{tag}</h1>
+    <div class="meta">Platform: {os}/{arch} &nbsp;|&nbsp; Layers: {layers} &nbsp;|&nbsp; Packages: {packages} &nbsp;|&nbsp; Scanned: {time}</div>
+    <div class="summary-stats">
+      <div class="stat-item"><span class="dot dot-critical"></span><span class="label">Critical</span><span class="value" style="color:#ef4444">{cr}</span></div>
+      <div class="stat-item"><span class="dot dot-high"></span><span class="label">High</span><span class="value" style="color:#f97316">{hi}</span></div>
+      <div class="stat-item"><span class="dot dot-medium"></span><span class="label">Medium</span><span class="value" style="color:#eab308">{me}</span></div>
+      <div class="stat-item"><span class="dot dot-low"></span><span class="label">Low</span><span class="value" style="color:#6b7280">{lo}</span></div>
+      <div class="stat-item" style="margin-left:auto"><span class="label">Total Vulns</span><span class="value" style="color:#e2e8f0">{total}</span></div>
     </div>
   </div>
 
-  <div class="table-card">
-    <div class="section-title">💡 Fix Suggestions</div>
-    <div id="suggestions"></div>
+  <div class="section">
+    <div class="tabs">
+      <button class="tab-btn active" onclick="switchTab('vulns')">🔍 Vulnerability List</button>
+      <button class="tab-btn" onclick="switchTab('pkgs')">📦 Package Manifest</button>
+    </div>
+    <div id="tab-vulns" class="tab-content active">
+      <div class="toolbar">
+        <input type="text" class="search-box" id="vulnSearch" placeholder="Search CVE ID or package name...">
+        <div class="sev-filters" id="sevFilters">
+          <button class="sev-btn sel-critical" data-sev="Critical" onclick="toggleSev(this)">Critical</button>
+          <button class="sev-btn sel-high" data-sev="High" onclick="toggleSev(this)">High</button>
+          <button class="sev-btn sel-medium" data-sev="Medium" onclick="toggleSev(this)">Medium</button>
+          <button class="sev-btn sel-low" data-sev="Low" onclick="toggleSev(this)">Low</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="vulnTable">
+          <thead>
+            <tr>
+              <th data-col="cve_id" onclick="sortVulns('cve_id')">CVE ID <span class="sort-arrow">▲</span></th>
+              <th data-col="severity" onclick="sortVulns('severity')">Severity <span class="sort-arrow">▲</span></th>
+              <th data-col="package_name" onclick="sortVulns('package_name')">Package <span class="sort-arrow">▲</span></th>
+              <th data-col="package_version" onclick="sortVulns('package_version')">Version <span class="sort-arrow">▲</span></th>
+              <th data-col="score" onclick="sortVulns('score')">CVSS <span class="sort-arrow">▼</span></th>
+              <th data-col="fix_version" onclick="sortVulns('fix_version')">Fix Version <span class="sort-arrow">▲</span></th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody id="vulnBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div id="tab-pkgs" class="tab-content">
+      <input type="text" class="pkg-search" id="pkgSearch" placeholder="Search package name, version, type, license...">
+      <div class="table-wrap" style="max-height:520px">
+        <table id="pkgTable">
+          <thead>
+            <tr><th>Name</th><th>Version</th><th>Type</th><th>Install Path</th><th>License</th></tr>
+          </thead>
+          <tbody id="pkgBody"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
-  <div class="table-card">
-    <div class="section-title">🔍 Vulnerabilities ({total})</div>
-    <input type="search" id="searchInput" placeholder="Search CVE ID, package name, description..." />
-    <div class="filter-row" id="filterRow">
-      <button class="filter-btn active" data-sev="all">All</button>
-      <button class="filter-btn" data-sev="Critical">Critical ({cr})</button>
-      <button class="filter-btn" data-sev="High">High ({hi})</button>
-      <button class="filter-btn" data-sev="Medium">Medium ({me})</button>
-      <button class="filter-btn" data-sev="Low">Low ({lo})</button>
-      <button class="filter-btn" data-sev="fixable">Fixable Only</button>
-    </div>
-    <div style="overflow-x: auto; max-height: 600px; overflow-y: auto;">
-      <table id="vulnTable">
-        <thead>
-          <tr>
-            <th>Severity</th>
-            <th>Score</th>
-            <th>CVE ID</th>
-            <th>Package</th>
-            <th>Version</th>
-            <th>Fix Version</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody id="vulnBody"></tbody>
-      </table>
-    </div>
+  <div class="fix-section" id="fixSection">
+    <h2>💡 Fix Suggestions</h2>
+    <div id="fixContent"></div>
   </div>
 
-  <div class="table-card">
-    <div class="section-title">📦 Packages ({packages})</div>
-    <input type="search" id="pkgSearch" placeholder="Search package name, type, version..." />
-    <div style="overflow-x: auto; max-height: 400px; overflow-y: auto;">
-      <table>
-        <thead>
-          <tr><th>Name</th><th>Version</th><th>Type</th><th>License</th><th>PURL</th></tr>
-        </thead>
-        <tbody id="pkgBody"></tbody>
-      </table>
-    </div>
-  </div>
+  <footer>Generated by image-scan at {time}</footer>
 </div>
 
 <script>
-const vulns = {vulns_json};
-const packages = {packages_json};
-const suggestions = {suggestions_json};
+(function(){{
+const vulns={vulns_json};
+const packages={packages_json};
+const suggestions={suggestions_json};
 
-let currentFilter = 'all';
+let activeSevs=new Set(['Critical','High','Medium','Low']);
+let sortCol='score';
+let sortDir=-1;
 
-function sevBadge(sev) {{
-  const classes = {{'Critical':'badge-critical','High':'badge-high','Medium':'badge-medium','Low':'badge-low','Unknown':'badge-low'}};
-  return `<span class="badge ${{classes[sev] || 'badge-low'}}">${{sev}}</span>`;
+function sevOrder(s){{const m={{Critical:4,High:3,Medium:2,Low:1,Unknown:0}};return m[s]||0}}
+function sevBadge(s){{
+  const cls={{Critical:'badge-critical',High:'badge-high',Medium:'badge-medium',Low:'badge-low',Unknown:'badge-unknown'}};
+  return '<span class="badge '+(cls[s]||'badge-unknown')+'">'+s+'</span>';
 }}
 
-function renderVulns(filtered) {{
-  const body = document.getElementById('vulnBody');
-  body.innerHTML = filtered.map(v => `
-    <tr data-sev="${{v.severity}}" data-fixable="${{v.fix_version ? 'yes' : 'no'}}">
-      <td>${{sevBadge(v.severity)}}</td>
-      <td>${{(v.cvss_v3_score || v.cvss_v2_score || 0).toFixed(1)}}</td>
-      <td><strong>${{v.cve_id}}</strong></td>
-      <td>${{v.package_name}}</td>
-      <td>${{v.package_version}}</td>
-      <td>${{v.fix_version ? `<span style="color:#38a169;font-weight:600">${{v.fix_version}}</span>` : '-'}}</td>
-      <td title="${{v.description}}">${{v.description.length > 80 ? v.description.substring(0,80)+'...' : v.description}}</td>
-    </tr>
-  `).join('') || '<tr><td colspan="7" style="text-align:center;padding:30px;color:#718096">No vulnerabilities match your filters</td></tr>';
-}}
-
-function applyFilters() {{
-  const q = document.getElementById('searchInput').value.toLowerCase();
-  let filtered = vulns;
-  if (currentFilter === 'fixable') filtered = filtered.filter(v => v.fix_version);
-  else if (currentFilter !== 'all') filtered = filtered.filter(v => v.severity === currentFilter);
-  if (q) filtered = filtered.filter(v =>
-    v.cve_id.toLowerCase().includes(q) ||
-    v.package_name.toLowerCase().includes(q) ||
-    v.description.toLowerCase().includes(q)
+function renderVulns(){{
+  const q=document.getElementById('vulnSearch').value.toLowerCase();
+  let filtered=vulns.filter(v=>activeSevs.has(v.severity));
+  if(q)filtered=filtered.filter(v=>
+    v.cve_id.toLowerCase().includes(q)||v.package_name.toLowerCase().includes(q)
   );
-  renderVulns(filtered);
+  filtered.sort((a,b)=>{{
+    let va,vb;
+    switch(sortCol){{
+      case'cve_id':va=a.cve_id;vb=b.cve_id;return sortDir*va.localeCompare(vb);
+      case'severity':va=sevOrder(a.severity);vb=sevOrder(b.severity);break;
+      case'package_name':va=a.package_name;vb=b.package_name;return sortDir*va.localeCompare(vb);
+      case'package_version':va=a.package_version;vb=b.package_version;return sortDir*va.localeCompare(vb);
+      case'score':va=a.cvss_v3_score||a.cvss_v2_score||0;vb=b.cvss_v3_score||b.cvss_v2_score||0;break;
+      case'fix_version':va=a.fix_version||'';vb=b.fix_version||'';return sortDir*va.localeCompare(vb);
+      default:return 0;
+    }}
+    return sortDir*(va>vb?1:va<vb?-1:0);
+  }});
+  const body=document.getElementById('vulnBody');
+  if(!filtered.length){{body.innerHTML='<tr><td colspan="7" class="no-results">No vulnerabilities match your filters</td></tr>';return}}
+  body.innerHTML=filtered.map(v=>{{
+    const score=(v.cvss_v3_score||v.cvss_v2_score||0).toFixed(1);
+    const fixHtml=v.fix_version?'<span class="fix-ver">'+v.fix_version+'</span>':'<span class="no-fix">-</span>';
+    const desc=v.description||'';
+    const trunc=desc.length>80?desc.substring(0,80)+'...':desc;
+    return '<tr><td><strong>'+v.cve_id+'</strong></td><td>'+sevBadge(v.severity)+'</td><td>'+v.package_name+'</td><td>'+v.package_version+'</td><td>'+score+'</td><td>'+fixHtml+'</td><td><div class="truncate" title="'+desc.replace(/"/g,'&quot;').replace(/</g,'&lt;')+'">'+trunc+'</div></td></tr>';
+  }}).join('');
+  document.querySelectorAll('#vulnTable thead th').forEach(th=>{{
+    const col=th.dataset.col;
+    th.classList.toggle('sorted',col===sortCol);
+    const arrow=th.querySelector('.sort-arrow');
+    if(arrow)arrow.textContent=col===sortCol?(sortDir===1?'▲':'▼'):'▲';
+  }});
 }}
 
-document.getElementById('searchInput').addEventListener('input', applyFilters);
-document.getElementById('filterRow').addEventListener('click', e => {{
-  if (e.target.classList.contains('filter-btn')) {{
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    e.target.classList.add('active');
-    currentFilter = e.target.dataset.sev;
-    applyFilters();
-  }}
-}});
+window.sortVulns=function(col){{
+  if(sortCol===col)sortDir*=-1;else{{sortCol=col;sortDir=col==='score'?-1:1}}
+  renderVulns();
+}};
 
-function renderPkgs(filtered) {{
-  document.getElementById('pkgBody').innerHTML = filtered.map(p => `
-    <tr>
-      <td><strong>${{p.name}}</strong></td>
-      <td>${{p.version}}</td>
-      <td><span class="badge badge-low">${{p.package_manager}}</span></td>
-      <td>${{p.license || '-'}}</td>
-      <td style="font-size:11px;color:#718096"><code>${{p.purl || '-'}}</code></td>
-    </tr>
-  `).join('');
+window.toggleSev=function(btn){{
+  const sev=btn.dataset.sev;
+  if(activeSevs.has(sev))activeSevs.delete(sev);else activeSevs.add(sev);
+  btn.classList.toggle('sel-'+sev.toLowerCase(),activeSevs.has(sev));
+  renderVulns();
+}};
+
+window.switchTab=function(tab){{
+  document.querySelectorAll('.tab-btn').forEach((b,i)=>b.classList.toggle('active',i===(tab==='vulns'?0:1)));
+  document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
+  document.getElementById('tab-'+tab).classList.add('active');
+}};
+
+document.getElementById('vulnSearch').addEventListener('input',renderVulns);
+
+function renderPkgs(){{
+  const q=document.getElementById('pkgSearch').value.toLowerCase();
+  let filtered=packages;
+  if(q)filtered=filtered.filter(p=>
+    p.name.toLowerCase().includes(q)||
+    p.version.toLowerCase().includes(q)||
+    p.package_manager.toLowerCase().includes(q)||
+    (p.license||'').toLowerCase().includes(q)||
+    (p.install_path||'').toLowerCase().includes(q)
+  );
+  document.getElementById('pkgBody').innerHTML=filtered.map(p=>{{
+    return '<tr><td><strong>'+p.name+'</strong></td><td>'+p.version+'</td><td>'+p.package_manager+'</td><td style="font-size:11px;color:#94a3b8">'+(p.install_path||'-')+'</td><td>'+(p.license||'-')+'</td></tr>';
+  }}).join('');
+}}
+document.getElementById('pkgSearch').addEventListener('input',renderPkgs);
+
+const fixContent=document.getElementById('fixContent');
+if(!suggestions.length){{
+  fixContent.innerHTML='<p style="color:#64748b">No fix suggestions available</p>';
+}}else{{
+  const grouped={{}};
+  suggestions.forEach(s=>{{
+    const key=s.package_name+'@'+s.current_version;
+    if(!grouped[key])grouped[key]={{pkg:s.package_name,cur:s.current_version,ver:s.suggested_version,cves:[],sev:s.max_severity}};
+    grouped[key].cves.push(...s.fixed_cves);
+    if(sevOrder(s.max_severity)>sevOrder(grouped[key].sev))grouped[key].sev=s.max_severity;
+  }});
+  fixContent.innerHTML=Object.values(grouped).map(g=>{{
+    return '<div class="fix-group"><div class="pkg-name">'+g.pkg+'</div><div class="upgrade">'+g.cur+' → '+g.ver+'</div><div class="cve-list">Fixes: '+g.cves.join(', ')+'</div></div>';
+  }}).join('');
 }}
 
-document.getElementById('pkgSearch').addEventListener('input', e => {{
-  const q = e.target.value.toLowerCase();
-  renderPkgs(packages.filter(p =>
-    p.name.toLowerCase().includes(q) ||
-    p.version.toLowerCase().includes(q) ||
-    p.package_manager.toLowerCase().includes(q)
-  ));
-}});
-
-document.getElementById('suggestions').innerHTML = suggestions.length === 0 ? '<p style="color:#718096">No fix suggestions available</p>' :
-  `<table><thead><tr><th>Severity</th><th>Package</th><th>Current</th><th>Upgrade To</th><th>CVEs Fixed</th><th>Impact</th></tr></thead><tbody>${{
-    suggestions.map(s => `
-      <tr>
-        <td>${{sevBadge(s.max_severity)}}</td>
-        <td><strong>${{s.package_name}}</strong></td>
-        <td>${{s.current_version}}</td>
-        <td><strong style="color:#38a169">${{s.suggested_version}}</strong></td>
-        <td>${{s.fixed_cves.length}} (${{s.fixed_cves.slice(0,3).join(', ')}}${{s.fixed_cves.length > 3 ? '...' : ''}})</td>
-        <td>${{s.total_cvss.toFixed(1)}} total CVSS</td>
-      </tr>
-    `).join('')
-  }}</tbody></table>`;
-
-applyFilters();
-renderPkgs(packages);
+renderVulns();
+renderPkgs();
+}})();
 </script>
 </body>
-</html>"#,
+</html>"##,
         name = result.image.name,
         tag = result.image.tag,
         time = result.scan_time.format("%Y-%m-%d %H:%M:%S UTC"),
         arch = result.image.architecture,
         os = result.image.os,
-        digest = result.image.digest.clone().unwrap_or_default(),
         layers = result.image.layers.len(),
         packages = summary.total_packages,
         total = total_vulns,
-        vuln_class = if total_vulns > 0 { if cr > 0 || hi > 0 {"critical"} else {"medium"} } else {"success"},
         cr = cr,
         hi = hi,
         me = me,
         lo = lo,
-        fixable = summary.fixable_count,
-        scan_id = result.scan_id,
     )
 }
 

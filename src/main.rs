@@ -87,6 +87,9 @@ struct ScanArgs {
 
     #[arg(long, help = "Output GitHub Actions annotations")]
     github_annotations: bool,
+
+    #[arg(long, help = "Output directory for HTML report and JSON scan data")]
+    output_dir: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -336,6 +339,28 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
 
     if args.github_annotations {
         report::emit_github_annotations(&vulnerabilities, quiet);
+    }
+
+    if let Some(ref output_dir) = args.output_dir {
+        std::fs::create_dir_all(output_dir)?;
+        let image_slug = image_info.name.replace(['/', ':', '@'], "_");
+        let timestamp = scan_time.format("%Y%m%d_%H%M%S");
+        let json_filename = format!("{}_{}.json", image_slug, timestamp);
+        let json_path = output_dir.join(&json_filename);
+        let json_data = report::format_json(&scan_result, &summary)?;
+        std::fs::write(&json_path, &json_data)?;
+        eprintln!(
+            "{}",
+            format!("   JSON scan data written to: {:?}", json_path).dimmed()
+        );
+        let html_filename = format!("{}_{}.html", image_slug, timestamp);
+        let html_path = output_dir.join(&html_filename);
+        let html = report::format_html(&scan_result, &summary, &suggestions);
+        std::fs::write(&html_path, &html)?;
+        eprintln!(
+            "{}",
+            format!("   HTML report written to: {:?}", html_path).dimmed()
+        );
     }
 
     let should_fail = report::check_severity_threshold(&vulnerabilities, effective_threshold.as_ref());
