@@ -10,10 +10,11 @@ const SPDX_VERSION: &str = "SPDX-2.3";
 const DATA_LICENSE: &str = "CC0-1.0";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxBom {
-    bomFormat: String,
-    specVersion: String,
-    serialNumber: Option<String>,
+    bom_format: String,
+    spec_version: String,
+    serial_number: Option<String>,
     version: u32,
     metadata: CycloneDxMetadata,
     components: Vec<CycloneDxComponent>,
@@ -21,6 +22,7 @@ struct CycloneDxBom {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxMetadata {
     timestamp: String,
     tools: Vec<CycloneDxTool>,
@@ -28,6 +30,7 @@ struct CycloneDxMetadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxTool {
     vendor: String,
     name: String,
@@ -35,6 +38,7 @@ struct CycloneDxTool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxComponent {
     #[serde(rename = "type")]
     component_type: String,
@@ -47,77 +51,89 @@ struct CycloneDxComponent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxLicenseWrapper {
     license: CycloneDxLicense,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxLicense {
     id: Option<String>,
     name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxHash {
     alg: String,
     content: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CycloneDxDependency {
     #[serde(rename = "ref")]
     ref_field: String,
-    dependsOn: Vec<String>,
+    depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxDocument {
-    spdxVersion: String,
-    dataLicense: String,
-    SPDXID: String,
+    spdx_version: String,
+    data_license: String,
+    #[serde(rename = "SPDXID")]
+    spdxid: String,
     name: String,
-    documentNamespace: String,
-    creationInfo: SpdxCreationInfo,
+    document_namespace: String,
+    creation_info: SpdxCreationInfo,
     packages: Vec<SpdxPackage>,
     relationships: Vec<SpdxRelationship>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxCreationInfo {
     created: String,
     creators: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxPackage {
-    SPDXID: String,
+    #[serde(rename = "SPDXID")]
+    spdxid: String,
     name: String,
-    versionInfo: Option<String>,
-    downloadLocation: String,
-    licenseConcluded: String,
-    licenseDeclared: String,
+    version_info: Option<String>,
+    download_location: String,
+    license_concluded: String,
+    license_declared: String,
     supplier: String,
-    packageVerificationCode: Option<SpdxPkgVerification>,
-    externalRefs: Option<Vec<SpdxExternalRef>>,
+    package_verification_code: Option<SpdxPkgVerification>,
+    external_refs: Option<Vec<SpdxExternalRef>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxPkgVerification {
-    packageVerificationCodeValue: String,
+    package_verification_code_value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxExternalRef {
-    referenceCategory: String,
-    referenceType: String,
-    referenceLocator: String,
+    reference_category: String,
+    reference_type: String,
+    reference_locator: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SpdxRelationship {
-    spdxElementId: String,
-    relationshipType: String,
-    relatedSpdxElement: String,
+    spdx_element_id: String,
+    relationship_type: String,
+    related_spdx_element: String,
 }
 
 pub fn generate_cyclonedx(
@@ -200,16 +216,16 @@ pub fn generate_cyclonedx(
             if !depends_on.is_empty() {
                 dependencies.push(CycloneDxDependency {
                     ref_field: component_ref,
-                    dependsOn: depends_on,
+                    depends_on,
                 });
             }
         }
     }
 
     let bom = CycloneDxBom {
-        bomFormat: BOM_FORMAT.to_string(),
-        specVersion: SPEC_VERSION.to_string(),
-        serialNumber: Some(serial_number),
+        bom_format: BOM_FORMAT.to_string(),
+        spec_version: SPEC_VERSION.to_string(),
+        serial_number: Some(serial_number),
         version: 1,
         metadata,
         components,
@@ -244,23 +260,23 @@ pub fn generate_spdx(
 
     let image_spdx_id = "SPDXRef-Image".to_string();
     spdx_packages.push(SpdxPackage {
-        SPDXID: image_spdx_id.clone(),
+        spdxid: image_spdx_id.clone(),
         name: format!("{}:{}", image.name, image.tag),
-        versionInfo: Some(image.tag.clone()),
-        downloadLocation: if let Some(d) = &image.digest {
+        version_info: Some(image.tag.clone()),
+        download_location: if let Some(d) = &image.digest {
             format!("sha256:{}", d.trim_start_matches("sha256:"))
         } else {
             "NOASSERTION".to_string()
         },
-        licenseConcluded: "NOASSERTION".to_string(),
-        licenseDeclared: "NOASSERTION".to_string(),
+        license_concluded: "NOASSERTION".to_string(),
+        license_declared: "NOASSERTION".to_string(),
         supplier: "NOASSERTION".to_string(),
-        packageVerificationCode: None,
-        externalRefs: Some(vec![
+        package_verification_code: None,
+        external_refs: Some(vec![
             SpdxExternalRef {
-                referenceCategory: "PACKAGE-MANAGER".to_string(),
-                referenceType: "purl".to_string(),
-                referenceLocator: format!(
+                reference_category: "PACKAGE-MANAGER".to_string(),
+                reference_type: "purl".to_string(),
+                reference_locator: format!(
                     "pkg:oci/{}@{}?arch={}&os={}",
                     image.name,
                     image.digest.as_deref().unwrap_or(&image.tag),
@@ -283,54 +299,54 @@ pub fn generate_spdx(
         });
 
         let verification = SpdxPkgVerification {
-            packageVerificationCodeValue: compute_sha256(&format!(
+            package_verification_code_value: compute_sha256(&format!(
                 "{}:{}:{}",
                 pkg.name, pkg.version, pkg.package_manager
             )),
         };
 
         spdx_packages.push(SpdxPackage {
-            SPDXID: spdx_id.clone(),
+            spdxid: spdx_id.clone(),
             name: pkg.name.clone(),
-            versionInfo: Some(pkg.version.clone()),
-            downloadLocation: "NOASSERTION".to_string(),
-            licenseConcluded: license.clone(),
-            licenseDeclared: license,
+            version_info: Some(pkg.version.clone()),
+            download_location: "NOASSERTION".to_string(),
+            license_concluded: license.clone(),
+            license_declared: license,
             supplier: "NOASSERTION".to_string(),
-            packageVerificationCode: Some(verification),
-            externalRefs: Some(vec![
+            package_verification_code: Some(verification),
+            external_refs: Some(vec![
                 SpdxExternalRef {
-                    referenceCategory: "PACKAGE-MANAGER".to_string(),
-                    referenceType: "purl".to_string(),
-                    referenceLocator: purl,
+                    reference_category: "PACKAGE-MANAGER".to_string(),
+                    reference_type: "purl".to_string(),
+                    reference_locator: purl,
                 }
             ]),
         });
 
         relationships.push(SpdxRelationship {
-            spdxElementId: image_spdx_id.clone(),
-            relationshipType: "CONTAINS".to_string(),
-            relatedSpdxElement: spdx_id.clone(),
+            spdx_element_id: image_spdx_id.clone(),
+            relationship_type: "CONTAINS".to_string(),
+            related_spdx_element: spdx_id.clone(),
         });
 
         for dep_name in &pkg.dependencies {
             if let Some(dep_id) = find_spdx_package_id(dep_name, packages, &package_ids) {
                 relationships.push(SpdxRelationship {
-                    spdxElementId: spdx_id.clone(),
-                    relationshipType: "DEPENDS_ON".to_string(),
-                    relatedSpdxElement: dep_id,
+                    spdx_element_id: spdx_id.clone(),
+                    relationship_type: "DEPENDS_ON".to_string(),
+                    related_spdx_element: dep_id,
                 });
             }
         }
     }
 
     let doc = SpdxDocument {
-        spdxVersion: SPDX_VERSION.to_string(),
-        dataLicense: DATA_LICENSE.to_string(),
-        SPDXID: "SPDXRef-DOCUMENT".to_string(),
+        spdx_version: SPDX_VERSION.to_string(),
+        data_license: DATA_LICENSE.to_string(),
+        spdxid: "SPDXRef-DOCUMENT".to_string(),
         name: format!("{}:{}", image.name, image.tag),
-        documentNamespace: doc_namespace,
-        creationInfo: creation_info,
+        document_namespace: doc_namespace,
+        creation_info: creation_info,
         packages: spdx_packages,
         relationships,
     };

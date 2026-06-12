@@ -1,31 +1,32 @@
 use crate::types::{ImageInfo, ImageSource, LayerInfo, RegistryAuth, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use indicatif::{ProgressBar, ProgressStyle};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct OciManifest {
-    schemaVersion: u32,
-    mediaType: Option<String>,
-    #[serde(rename = "manifests")]
+    schema_version: u32,
+    media_type: Option<String>,
     manifests: Option<Vec<OciManifestRef>>,
     config: Option<OciDescriptor>,
     layers: Option<Vec<OciDescriptor>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct OciManifestRef {
-    mediaType: String,
+    media_type: String,
     digest: String,
     size: u64,
     platform: Option<OciPlatform>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct OciPlatform {
     architecture: String,
     os: String,
@@ -35,13 +36,15 @@ struct OciPlatform {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 struct OciDescriptor {
-    mediaType: String,
+    media_type: String,
     digest: String,
     size: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OciImageConfig {
     architecture: String,
     os: String,
@@ -53,19 +56,24 @@ struct OciImageConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OciRuntimeConfig {
-    Env: Option<Vec<String>>,
-    Cmd: Option<Vec<String>>,
-    Labels: Option<HashMap<String, String>>,
+    #[serde(rename = "Env")]
+    env: Option<Vec<String>>,
+    #[serde(rename = "Cmd")]
+    cmd: Option<Vec<String>>,
+    #[serde(rename = "Labels")]
+    labels: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct OciRootfs {
     #[serde(rename = "type")]
     fs_type: String,
+    #[serde(rename = "diff_ids")]
     diff_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct OciHistory {
     created: Option<String>,
     created_by: Option<String>,
@@ -75,9 +83,12 @@ struct OciHistory {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct DockerManifestEntry {
-    Config: String,
-    RepoTags: Vec<String>,
-    Layers: Vec<String>,
+    #[serde(rename = "Config")]
+    config: String,
+    #[serde(rename = "RepoTags")]
+    repo_tags: Vec<String>,
+    #[serde(rename = "Layers")]
+    layers: Vec<String>,
 }
 
 pub struct ImageExtractor {
@@ -125,7 +136,7 @@ impl ImageExtractor {
 
         let (manifest_digest, actual_manifest) = match manifest.manifests {
             Some(manifest_list) => {
-                let selected = select_platform_manifest(&manifest_list, "linux", "amd64")
+                let selected = select_platform_manifest(&manifest_list, "linux", "amd64", None)
                     .ok_or_else(|| anyhow::anyhow!("No linux/amd64 manifest found"))?;
 
                 let digest = selected.digest.clone();
@@ -177,7 +188,7 @@ impl ImageExtractor {
             layer_infos.push(LayerInfo {
                 digest: layer.digest.clone(),
                 size: layer.size,
-                media_type: layer.mediaType.clone(),
+                media_type: layer.media_type.clone(),
             });
         }
 
@@ -205,95 +216,151 @@ impl ImageExtractor {
     }
 
     async fn extract_from_tar(&self, tar_path: &Path, work_dir: &Path) -> Result<ImageInfo> {
-        let file = std::fs::File::open(tar_path)?;
-        let mut archive = tar::Archive::new(file);
+        let unpack_dir = work_dir.join("unpacked");
+        log::info!("Unpacking tar archive to {:?}", unpack_dir);
+        unpack_tar_to_dir(tar_path, &unpack_dir).await
+            .map_err(|e| anyhow::anyhow!("Failed to unpack tar archive: {}", e))?;
 
-        let _manifest_json_path = work_dir.join("manifest.json");
-        let layers_dir = work_dir.join("layers");
-        fs::create_dir_all(&layers_dir).await?;
+        let has_oci_layout = unpack_dir.join("oci-layout").exists();
+        let has_index_json = unpack_dir.join("index.json").exists();
+        let has_manifest_json = unpack_dir.join("manifest.json").exists();
 
-        let entries: Vec<tar::Entry<_>> = archive.entries()?.filter_map(|e| e.ok()).collect();
+        log::debug!("Tar contents: oci-layout={}, index.json={}, manifest.json={}",
+            has_oci_layout, has_index_json, has_manifest_json);
 
-        let mut manifest_content: Option<String> = None;
-        let mut layer_data: HashMap<String, Vec<u8>> = HashMap::new();
-
-        for entry in entries {
-            let path = entry.path()?.to_path_buf();
-            let data = entry.bytes().filter_map(|b| b.ok()).collect::<Vec<u8>>();
-
-            if path.ends_with("manifest.json") {
-                manifest_content = Some(String::from_utf8_lossy(&data).to_string());
-            } else {
-                let path_str = path.to_string_lossy().to_string();
-                if path_str.ends_with(".tar") || path_str.ends_with(".tar.gz") || path_str.ends_with("layer.tar") {
-                    layer_data.insert(path_str, data);
-                }
-            }
+        if has_oci_layout && has_index_json {
+            log::info!("Detected OCI image format in tar");
+            return self.extract_from_oci(&unpack_dir, work_dir).await;
         }
 
-        let manifest_content = manifest_content
-            .ok_or_else(|| anyhow::anyhow!("manifest.json not found in tar"))?;
-        let docker_manifests: Vec<DockerManifestEntry> = serde_json::from_str(&manifest_content)?;
-        let docker_manifest = docker_manifests.first()
-            .ok_or_else(|| anyhow::anyhow!("No manifest entries found"))?;
+        if has_manifest_json {
+            log::info!("Detected Docker image format in tar");
+            return self.extract_from_docker_tar(&unpack_dir, work_dir).await;
+        }
 
-        let repo_tag = docker_manifest.RepoTags.first()
+        Err(anyhow::anyhow!(
+            "Unrecognized tar format: could not find oci-layout/index.json (OCI) or manifest.json (Docker)"
+        ))
+    }
+
+    async fn extract_from_docker_tar(&self, unpack_dir: &Path, work_dir: &Path) -> Result<ImageInfo> {
+        let manifest_path = unpack_dir.join("manifest.json");
+        let manifest_content = fs::read_to_string(&manifest_path).await
+            .map_err(|e| anyhow::anyhow!("Failed to read manifest.json: {}", e))?;
+        log::debug!("Parsing manifest.json ({} bytes)", manifest_content.len());
+
+        let docker_manifests: Vec<DockerManifestEntry> = serde_json::from_str(&manifest_content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse manifest.json: {}", e))?;
+        let docker_manifest = docker_manifests.first()
+            .ok_or_else(|| anyhow::anyhow!("No manifest entries found in manifest.json"))?;
+
+        let repo_tag = docker_manifest.repo_tags.first()
             .map(|t| t.clone())
             .unwrap_or_else(|| "unknown:latest".to_string());
         let (name, tag) = parse_repo_tag(&repo_tag);
 
+        let config_path = unpack_dir.join(&docker_manifest.config);
+        let (architecture, os, created) = if config_path.exists() {
+            match fs::read_to_string(&config_path).await {
+                Ok(config_content) => {
+                    match serde_json::from_str::<OciImageConfig>(&config_content) {
+                        Ok(image_config) => (
+                            image_config.architecture,
+                            image_config.os,
+                            image_config.created.and_then(|c| chrono::DateTime::parse_from_rfc3339(&c).ok()
+                                .map(|d| d.with_timezone(&chrono::Utc))),
+                        ),
+                        Err(_) => ("amd64".to_string(), "linux".to_string(), None),
+                    }
+                },
+                Err(_) => ("amd64".to_string(), "linux".to_string(), None),
+            }
+        } else {
+            ("amd64".to_string(), "linux".to_string(), None)
+        };
+
+        let layers_dir = work_dir.join("layers");
+        fs::create_dir_all(&layers_dir).await?;
+
         let mut layer_infos = Vec::new();
-        for (idx, layer_path_str) in docker_manifest.Layers.iter().enumerate() {
+        for (idx, layer_path_str) in docker_manifest.layers.iter().enumerate() {
             let extract_dir = layers_dir.join(format!("layer_{:03}", idx));
             fs::create_dir_all(&extract_dir).await?;
 
-            if let Some(data) = layer_data.get(layer_path_str) {
-                let temp_path = work_dir.join(format!("temp_layer_{:03}.tar", idx));
-                fs::write(&temp_path, data).await?;
-                extract_layer_archive(&temp_path, &extract_dir)?;
-                let _ = fs::remove_file(&temp_path).await;
+            let layer_path = unpack_dir.join(layer_path_str);
+            log::debug!("Extracting layer {}/{}: {:?}", idx + 1, docker_manifest.layers.len(), layer_path);
+
+            if layer_path.exists() {
+                let data = fs::read(&layer_path).await?;
+                extract_layer_archive(&layer_path, &extract_dir)
+                    .map_err(|e| anyhow::anyhow!("Failed to extract layer {} ({:?}): {}", idx, layer_path, e))?;
 
                 layer_infos.push(LayerInfo {
-                    digest: format!("sha256:{}", sha256_hash(data)),
+                    digest: format!("sha256:{}", sha256_hash(&data)),
                     size: data.len() as u64,
                     media_type: "application/vnd.docker.image.rootfs.diff.tar".to_string(),
                 });
+            } else {
+                log::warn!("Layer file not found in tar: {:?}", layer_path);
             }
         }
 
+        log::info!("Successfully extracted {} layers from docker tar", layer_infos.len());
+
         Ok(ImageInfo {
-            reference: tar_path.to_string_lossy().to_string(),
+            reference: repo_tag,
             name,
             tag,
             digest: None,
-            architecture: "amd64".to_string(),
-            os: "linux".to_string(),
+            architecture,
+            os,
             layers: layer_infos,
-            created: None,
+            created,
         })
     }
 
     async fn extract_from_oci(&self, oci_path: &Path, work_dir: &Path) -> Result<ImageInfo> {
         let index_path = oci_path.join("index.json");
         let index_content = fs::read_to_string(&index_path).await?;
-        let index: OciManifest = serde_json::from_str(&index_content)?;
+        let mut current: OciManifest = serde_json::from_str(&index_content)?;
 
-        let manifest_ref = match index.manifests {
-            Some(refs) => {
-                select_platform_manifest(&refs, "linux", "amd64")
-                    .ok_or_else(|| anyhow::anyhow!("No linux/amd64 manifest in OCI index"))?
-                    .clone()
+        let target_os = "linux";
+        let target_arch = "amd64";
+        let blobs_dir = oci_path.join("blobs");
+        let mut max_iterations = 10;
+        loop {
+            max_iterations -= 1;
+            if max_iterations <= 0 {
+                return Err(anyhow::anyhow!("Too many OCI manifest index nesting levels"));
             }
-            None => {
-                return Err(anyhow::anyhow!("OCI index.json has no manifests"));
+
+            if current.layers.is_some() && current.config.is_some() {
+                break;
             }
-        };
 
-        let manifest_path = oci_path.join("blobs").join(blob_digest_to_path(&manifest_ref.digest));
-        let manifest_content = fs::read_to_string(&manifest_path).await?;
-        let manifest: OciManifest = serde_json::from_str(&manifest_content)?;
+            let manifests = current.manifests.clone()
+                .ok_or_else(|| anyhow::anyhow!("OCI manifest has no layers, config, or child manifests"))?;
 
-        let layers = manifest.layers.ok_or_else(|| anyhow::anyhow!("No layers in manifest"))?;
+            let selected = select_platform_manifest(&manifests, target_os, target_arch, Some(&blobs_dir))
+                .ok_or_else(|| anyhow::anyhow!("No matching manifest for {}/{} in OCI index", target_os, target_arch))?;
+
+            let child_path = oci_path.join("blobs").join(blob_digest_to_path(&selected.digest));
+            log::debug!("Resolving OCI manifest: {:?}", child_path);
+            if !child_path.exists() {
+                return Err(anyhow::anyhow!(
+                    "Referenced OCI manifest blob not found: {:?} (digest={}). Available blobs: check {:?}",
+                    child_path, selected.digest, oci_path.join("blobs/sha256")
+                ));
+            }
+            let child_content = fs::read_to_string(&child_path).await
+                .map_err(|e| anyhow::anyhow!("Failed to read OCI manifest blob {:?}: {}", child_path, e))?;
+            current = serde_json::from_str(&child_content)
+                .map_err(|e| anyhow::anyhow!("Failed to parse OCI child manifest {:?}: {}", child_path, e))?;
+        }
+
+        let manifest = current;
+        let layers = manifest.layers.clone()
+            .ok_or_else(|| anyhow::anyhow!("No layers in resolved OCI manifest"))?;
         let layers_dir = work_dir.join("layers");
         fs::create_dir_all(&layers_dir).await?;
 
@@ -302,31 +369,40 @@ impl ImageExtractor {
             let blob_path = oci_path.join("blobs").join(blob_digest_to_path(&layer.digest));
             let extract_dir = layers_dir.join(format!("layer_{:03}", idx));
             fs::create_dir_all(&extract_dir).await?;
-            extract_layer_archive(&blob_path, &extract_dir)?;
+            if !blob_path.exists() {
+                return Err(anyhow::anyhow!("Layer blob not found: {:?}", blob_path));
+            }
+            extract_layer_archive(&blob_path, &extract_dir)
+                .map_err(|e| anyhow::anyhow!("Failed to extract layer {:?}: {}", blob_path, e))?;
 
             layer_infos.push(LayerInfo {
                 digest: layer.digest.clone(),
                 size: layer.size,
-                media_type: layer.mediaType.clone(),
+                media_type: layer.media_type.clone(),
             });
         }
 
-        let config = manifest.config.ok_or_else(|| anyhow::anyhow!("No config in manifest"))?;
+        let config = manifest.config.clone()
+            .ok_or_else(|| anyhow::anyhow!("No config in resolved OCI manifest"))?;
         let config_path = oci_path.join("blobs").join(blob_digest_to_path(&config.digest));
         let config_content = fs::read_to_string(&config_path).await?;
         let image_config: OciImageConfig = serde_json::from_str(&config_content)?;
 
+        let manifest_digest = config.digest.clone();
+        let name = oci_path.file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
         Ok(ImageInfo {
-            reference: oci_path.to_string_lossy().to_string(),
-            name: oci_path.file_name()
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
+            reference: name.clone(),
+            name,
             tag: "latest".to_string(),
-            digest: Some(manifest_ref.digest),
+            digest: Some(manifest_digest),
             architecture: image_config.architecture,
             os: image_config.os,
             layers: layer_infos,
-            created: image_config.created.and_then(|c| chrono::DateTime::parse_from_rfc3339(&c).ok().map(|d| d.with_timezone(&chrono::Utc))),
+            created: image_config.created.and_then(|c| chrono::DateTime::parse_from_rfc3339(&c).ok()
+                .map(|d| d.with_timezone(&chrono::Utc))),
         })
     }
 }
@@ -428,15 +504,36 @@ fn select_platform_manifest(
     manifests: &[OciManifestRef],
     target_os: &str,
     target_arch: &str,
+    blobs_dir: Option<&Path>,
 ) -> Option<OciManifestRef> {
+    let mut fallback: Option<OciManifestRef> = None;
+    let mut first_available: Option<OciManifestRef> = None;
+
     for m in manifests {
+        let blob_exists = match blobs_dir {
+            Some(dir) => dir.join(blob_digest_to_path(&m.digest)).exists(),
+            None => true,
+        };
+
+        if first_available.is_none() && blob_exists {
+            first_available = Some(m.clone());
+        }
+
         if let Some(platform) = &m.platform {
-            if platform.os == target_os && platform.architecture == target_arch {
+            if platform.os == target_os && platform.architecture == target_arch && blob_exists {
                 return Some(m.clone());
             }
+            if platform.os != "unknown" && platform.architecture != "unknown"
+                && fallback.is_none() && blob_exists
+            {
+                fallback = Some(m.clone());
+            }
+        } else if fallback.is_none() && blob_exists {
+            fallback = Some(m.clone());
         }
     }
-    manifests.first().cloned()
+
+    fallback.or(first_available).or_else(|| manifests.first().cloned())
 }
 
 async fn fetch_blob_data(url: &str, token: &str) -> Result<Vec<u8>> {
@@ -489,24 +586,36 @@ async fn download_blob(
 
 fn extract_layer_archive(archive_path: &Path, dest: &Path) -> Result<()> {
     use std::fs::File;
-    use std::io::BufReader;
+    use std::io::{BufReader, Read};
+
+    let mut file = File::open(archive_path)?;
+    let mut magic = [0u8; 10];
+    let n = file.read(&mut magic)?;
 
     let file = File::open(archive_path)?;
-    let path_str = archive_path.to_string_lossy();
+    let reader = BufReader::new(file);
 
-    if path_str.ends_with(".gz") || path_str.ends_with(".tgz") {
-        let decoder = flate2::read::GzDecoder::new(BufReader::new(file));
+    if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+        let decoder = flate2::read::GzDecoder::new(reader);
         let mut archive = tar::Archive::new(decoder);
         archive.unpack(dest)?;
-    } else if path_str.ends_with(".zst") || path_str.ends_with(".zstd") {
-        let decoder = zstd::Decoder::new(BufReader::new(file))?;
+    } else if n >= 4 && magic[0] == 0x28 && magic[1] == 0xb5 && magic[2] == 0x2f && magic[3] == 0xfd {
+        let decoder = zstd::Decoder::new(reader)?;
         let mut archive = tar::Archive::new(decoder);
         archive.unpack(dest)?;
     } else {
-        let mut archive = tar::Archive::new(BufReader::new(file));
+        let mut archive = tar::Archive::new(reader);
         archive.unpack(dest)?;
     }
 
+    Ok(())
+}
+
+async fn unpack_tar_to_dir(tar_path: &Path, dest_dir: &Path) -> Result<()> {
+    let file = std::fs::File::open(tar_path)?;
+    let mut archive = tar::Archive::new(file);
+    fs::create_dir_all(dest_dir).await?;
+    archive.unpack(dest_dir)?;
     Ok(())
 }
 

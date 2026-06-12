@@ -339,37 +339,42 @@ struct SarifTool {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifDriver {
     name: String,
     version: String,
-    informationUri: String,
+    information_uri: String,
     rules: Vec<SarifRule>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifRule {
     id: String,
     name: String,
-    shortDescription: SarifMessage,
-    fullDescription: SarifMessage,
-    defaultConfiguration: SarifRuleConfig,
-    helpUri: Option<String>,
+    short_description: SarifMessage,
+    full_description: SarifMessage,
+    default_configuration: SarifRuleConfig,
+    help_uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifRuleConfig {
     level: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifMessage {
     text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifResult {
-    ruleId: String,
-    ruleIndex: usize,
+    rule_id: String,
+    rule_index: usize,
     level: String,
     message: SarifMessage,
     locations: Vec<SarifLocation>,
@@ -377,32 +382,37 @@ struct SarifResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifLocation {
-    physicalLocation: SarifPhysicalLocation,
+    physical_location: SarifPhysicalLocation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifPhysicalLocation {
-    artifactLocation: SarifArtifactLocation,
+    artifact_location: SarifArtifactLocation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifArtifactLocation {
     uri: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifProperties {
-    issueSeverity: String,
-    cvssScore: Option<f64>,
-    packageName: String,
-    packageVersion: String,
-    fixVersion: Option<String>,
+    issue_severity: String,
+    cvss_score: Option<f64>,
+    package_name: String,
+    package_version: String,
+    fix_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SarifInvocation {
-    executionSuccessful: bool,
+    execution_successful: bool,
 }
 
 pub fn format_sarif(
@@ -419,16 +429,16 @@ pub fn format_sarif(
             rules.push(SarifRule {
                 id: rule_id.clone(),
                 name: rule_id.clone(),
-                shortDescription: SarifMessage {
+                short_description: SarifMessage {
                     text: format!("{} vulnerability in {}", v.severity.as_str(), v.package_name),
                 },
-                fullDescription: SarifMessage {
+                full_description: SarifMessage {
                     text: v.description.clone(),
                 },
-                defaultConfiguration: SarifRuleConfig {
+                default_configuration: SarifRuleConfig {
                     level: sarif_level(&v.severity),
                 },
-                helpUri: v.references.first().cloned(),
+                help_uri: v.references.first().cloned(),
             });
         }
 
@@ -439,8 +449,8 @@ pub fn format_sarif(
         );
 
         sarif_results.push(SarifResult {
-            ruleId: rule_id.clone(),
-            ruleIndex: *rule_map.get(&rule_id).unwrap_or(&0),
+            rule_id: rule_id.clone(),
+            rule_index: *rule_map.get(&rule_id).unwrap_or(&0),
             level,
             message: SarifMessage {
                 text: format!(
@@ -458,18 +468,18 @@ pub fn format_sarif(
                 ),
             },
             locations: vec![SarifLocation {
-                physicalLocation: SarifPhysicalLocation {
-                    artifactLocation: SarifArtifactLocation {
+                physical_location: SarifPhysicalLocation {
+                    artifact_location: SarifArtifactLocation {
                         uri: artifact_path,
                     },
                 },
             }],
             properties: SarifProperties {
-                issueSeverity: v.severity.as_str().to_lowercase(),
-                cvssScore: Some(v.effective_score()),
-                packageName: v.package_name.clone(),
-                packageVersion: v.package_version.clone(),
-                fixVersion: v.fix_version.clone(),
+                issue_severity: v.severity.as_str().to_lowercase(),
+                cvss_score: Some(v.effective_score()),
+                package_name: v.package_name.clone(),
+                package_version: v.package_version.clone(),
+                fix_version: v.fix_version.clone(),
             },
         });
     }
@@ -482,13 +492,13 @@ pub fn format_sarif(
                 driver: SarifDriver {
                     name: "image-scan".to_string(),
                     version: env!("CARGO_PKG_VERSION").to_string(),
-                    informationUri: "https://github.com/image-scan/cli".to_string(),
+                    information_uri: "https://github.com/image-scan/cli".to_string(),
                     rules,
                 },
             },
             results: sarif_results,
             invocations: vec![SarifInvocation {
-                executionSuccessful: true,
+                execution_successful: true,
             }],
         }],
     };

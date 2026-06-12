@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const OSV_API_URL: &str = "https://api.osv.dev/v1/query";
-const DEFAULT_ECOSYSTEMS: &[&str] = &[
+const _DEFAULT_ECOSYSTEMS: &[&str] = &[
     "Debian", "Alpine", "RPM", "PyPI", "npm", "Go", "crates.io", "Maven",
 ];
 
@@ -83,6 +83,7 @@ struct OsvReference {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct CveDatabase {
     cache: Arc<DashMap<String, Vec<Vulnerability>>>,
     db_path: PathBuf,
