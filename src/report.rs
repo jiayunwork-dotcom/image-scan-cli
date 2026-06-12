@@ -1,3 +1,4 @@
+use crate::policy::{OverallPolicyResult, PolicyEvaluationResult, RuleSeverity, RuleStatus};
 use crate::sbom::FixSuggestion;
 use crate::types::{
     BaselineDiff, ImageInfo, Package, PolicyConfig, ScanResult, ScanSummary, Severity, Vulnerability,
@@ -60,6 +61,7 @@ pub fn print_console_report(
     summary: &ScanSummary,
     suggestions: &[FixSuggestion],
     diff: Option<&BaselineDiff>,
+    policy_eval: Option<&PolicyEvaluationResult>,
     quiet: bool,
 ) {
     if quiet {
@@ -73,6 +75,9 @@ pub fn print_console_report(
             summary.low_count,
             summary.fixable_count
         );
+        if let Some(pe) = policy_eval {
+            println!("POLICY={}", pe.result.as_str());
+        }
         return;
     }
 
@@ -94,6 +99,10 @@ pub fn print_console_report(
 
     if !summary.top_affected_packages.is_empty() {
         print_top_packages(&summary.top_affected_packages);
+    }
+
+    if let Some(pe) = policy_eval {
+        print_policy_evaluation(pe);
     }
 }
 
@@ -247,6 +256,54 @@ fn print_top_packages(top: &[(String, usize)]) {
     }
 }
 
+fn print_policy_evaluation(eval: &PolicyEvaluationResult) {
+    print_header("Policy Evaluation");
+
+    println!("\n  {:<18} {}", "Policy:".dimmed(), eval.policy_name.white());
+    println!(
+        "  {:<18} {}",
+        "Version:".dimmed(),
+        eval.policy_version.white()
+    );
+
+    let result_colored = match eval.result {
+        OverallPolicyResult::Approved => eval.result.as_str().green().bold(),
+        OverallPolicyResult::Rejected => eval.result.as_str().red().bold(),
+        OverallPolicyResult::PassedWithWarnings => eval.result.as_str().yellow().bold(),
+    };
+    println!("  {:<18} {}", "Result:".dimmed(), result_colored);
+
+    println!("\n  {}", "Rule Evaluation:".bold());
+    println!("  {}", "─".repeat(76));
+
+    for rule in &eval.rules {
+        let status_icon = if rule.status == RuleStatus::Pass {
+            "✅ PASS".green()
+        } else {
+            "❌ FAIL".red()
+        };
+
+        let sev_tag = format!("[{}]", rule.severity.as_str());
+        let sev_colored = match rule.severity {
+            RuleSeverity::Error => sev_tag.red(),
+            RuleSeverity::Warning => sev_tag.yellow(),
+            RuleSeverity::Info => sev_tag.blue(),
+        };
+
+        println!(
+            "  {} {} {} - {}",
+            status_icon,
+            sev_colored,
+            rule.id.cyan(),
+            rule.name.white()
+        );
+
+        for v in &rule.violations {
+            println!("     {}", format!("→ {}", v).dimmed());
+        }
+    }
+}
+
 fn print_baseline_diff(diff: &BaselineDiff) {
     println!("\n{}", "📈 Baseline Comparison:".bold());
 
@@ -306,8 +363,8 @@ fn severity_color(s: &str, sev: &Severity) -> colored::ColoredString {
     }
 }
 
-pub fn format_json(result: &ScanResult, summary: &ScanSummary) -> Result<String, serde_json::Error> {
-    let output = json!({
+pub fn format_json(result: &ScanResult, summary: &ScanSummary, policy_eval: Option<&PolicyEvaluationResult>) -> Result<String, serde_json::Error> {
+    let mut output = json!({
         "scan_id": result.scan_id,
         "scan_time": result.scan_time,
         "image": result.image,
@@ -315,6 +372,27 @@ pub fn format_json(result: &ScanResult, summary: &ScanSummary) -> Result<String,
         "packages": result.packages,
         "vulnerabilities": result.vulnerabilities,
     });
+
+    if let Some(pe) = policy_eval {
+        output.as_object_mut().unwrap().insert(
+            "policy_evaluation".to_string(),
+            json!({
+                "result": pe.result.as_str(),
+                "policy_name": pe.policy_name,
+                "policy_version": pe.policy_version,
+                "rules": pe.rules.iter().map(|r| json!({
+                    "id": r.id,
+                    "name": r.name,
+                    "status": match r.status {
+                        RuleStatus::Pass => "pass",
+                        RuleStatus::Fail => "fail",
+                    },
+                    "violations": r.violations,
+                })).collect::<Vec<_>>(),
+            }),
+        );
+    }
+
     serde_json::to_string_pretty(&output)
 }
 
@@ -518,6 +596,7 @@ pub fn format_html(
     result: &ScanResult,
     summary: &ScanSummary,
     suggestions: &[FixSuggestion],
+    policy_eval: Option<&PolicyEvaluationResult>,
 ) -> String {
     let vulns_json = serde_json::to_string(&result.vulnerabilities).unwrap_or_default();
     let packages_json = serde_json::to_string(&result.packages).unwrap_or_default();
@@ -528,6 +607,40 @@ pub fn format_html(
     let me = summary.medium_count;
     let lo = summary.low_count;
     let total_vulns = summary.total_vulnerabilities;
+
+    let policy_card_html = match policy_eval {
+        Some(pe) => {
+            let css_class = match pe.result {
+                OverallPolicyResult::Approved => "approved",
+                OverallPolicyResult::Rejected => "rejected",
+                OverallPolicyResult::PassedWithWarnings => "warned",
+            };
+            let result_text = pe.result.as_str();
+            let mut rules_html = String::new();
+            for rule in &pe.rules {
+                let status_class = if rule.status == RuleStatus::Pass { "pass" } else { "fail" };
+                let status_text = if rule.status == RuleStatus::Pass { "✅ PASS" } else { "❌ FAIL" };
+                let escaped_name = html_escape(&rule.name);
+                let escaped_id = html_escape(&rule.id);
+                rules_html.push_str(&format!(
+                    r#"<div class="policy-rule"><div class="rule-header"><span class="{status_class}">{status_text}</span><span>{escaped_name}</span><span class="rule-id">[{escaped_id}]</span></div>"#
+                ));
+                for v in &rule.violations {
+                    let escaped_v = html_escape(v);
+                    rules_html.push_str(&format!(
+                        r#"<div class="violation">→ {escaped_v}</div>"#
+                    ));
+                }
+                rules_html.push_str("</div>");
+            }
+            let policy_name_esc = html_escape(&pe.policy_name);
+            let policy_version_esc = html_escape(&pe.policy_version);
+            format!(
+                r#"<div class="policy-card {css_class}"><h2>🛡️ Policy Compliance</h2><div class="policy-meta">{policy_name_esc} (v{policy_version_esc})</div><div class="policy-result {css_class}">{result_text}</div>{rules_html}</div>"#
+            )
+        }
+        None => String::new(),
+    };
 
     format!(
         r##"<!DOCTYPE html>
@@ -600,6 +713,22 @@ tbody tr:hover{{background:#1e293b80}}
 .pkg-search{{width:100%;padding:10px 14px;background:#0f172a;border:1px solid #334155;border-radius:8px;color:#e2e8f0;font-size:14px;outline:none;margin-bottom:16px}}
 .pkg-search:focus{{border-color:#3b82f6}}
 .pkg-search::placeholder{{color:#64748b}}
+.policy-card{{border-radius:12px;padding:24px;margin-bottom:28px;border:2px solid}}
+.policy-card.approved{{background:linear-gradient(135deg,#052e16 0%,#14532d 100%);border-color:#22c55e}}
+.policy-card.rejected{{background:linear-gradient(135deg,#450a0a 0%,#7f1d1d 100%);border-color:#ef4444}}
+.policy-card.warned{{background:linear-gradient(135deg,#422006 0%,#713f12 100%);border-color:#eab308}}
+.policy-card h2{{font-size:18px;font-weight:700;margin-bottom:4px}}
+.policy-card .policy-meta{{font-size:13px;color:#94a3b8;margin-bottom:16px}}
+.policy-result{{font-size:28px;font-weight:800;letter-spacing:1px;margin-bottom:16px}}
+.policy-result.approved{{color:#4ade80}}
+.policy-result.rejected{{color:#f87171}}
+.policy-result.warned{{color:#fbbf24}}
+.policy-rule{{padding:10px 14px;background:rgba(0,0,0,.25);border-radius:8px;margin-bottom:8px}}
+.policy-rule .rule-header{{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600}}
+.policy-rule .rule-header .pass{{color:#4ade80}}
+.policy-rule .rule-header .fail{{color:#f87171}}
+.policy-rule .rule-id{{color:#94a3b8;font-size:12px}}
+.policy-rule .violation{{color:#fca5a5;font-size:12px;margin-top:4px;padding-left:24px}}
 footer{{text-align:center;padding:20px;color:#475569;font-size:12px}}
 </style>
 </head>
@@ -666,6 +795,8 @@ footer{{text-align:center;padding:20px;color:#475569;font-size:12px}}
     <h2>💡 Fix Suggestions</h2>
     <div id="fixContent"></div>
   </div>
+
+  {policy_card_html}
 
   <footer>Generated by image-scan at {time}</footer>
 </div>
@@ -792,6 +923,7 @@ renderPkgs();
         hi = hi,
         me = me,
         lo = lo,
+        policy_card_html = policy_card_html,
     )
 }
 
@@ -998,4 +1130,12 @@ pub fn load_baseline(path: &Path) -> Result<ScanResult, anyhow::Error> {
     let content = std::fs::read_to_string(path)?;
     let result: ScanResult = serde_json::from_str(&content)?;
     Ok(result)
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }

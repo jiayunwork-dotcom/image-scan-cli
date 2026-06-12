@@ -218,6 +218,11 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
 
     let policy = report::load_policy(args.policy.as_deref())?;
 
+    let admission_policy: Option<policy::AdmissionPolicy> = args.policy.as_deref()
+        .map(|p| policy::try_load_admission_policy(p))
+        .transpose()?
+        .flatten();
+
     if !quiet {
         eprintln!("{}", "🔍 Extracting image layers...".cyan());
     }
@@ -301,6 +306,10 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
         eprintln!("⚠️  License Warning: {}", warning);
     }
 
+    let policy_eval = admission_policy.as_ref().map(|ap| {
+        policy::evaluate_policy(ap, &vulnerabilities, &packages, &image_info.layers)
+    });
+
     let output_format = OutputFormat::from_str(&args.format);
 
     match output_format {
@@ -310,11 +319,12 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
                 &summary,
                 &suggestions,
                 baseline_diff.as_ref(),
+                policy_eval.as_ref(),
                 quiet,
             );
         }
         OutputFormat::Json => {
-            let json = report::format_json(&scan_result, &summary)?;
+            let json = report::format_json(&scan_result, &summary, policy_eval.as_ref())?;
             write_output(&json, args.output.as_deref())?;
         }
         OutputFormat::Sarif => {
@@ -322,7 +332,7 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
             write_output(&sarif, args.output.as_deref())?;
         }
         OutputFormat::Html => {
-            let html = report::format_html(&scan_result, &summary, &suggestions);
+            let html = report::format_html(&scan_result, &summary, &suggestions, policy_eval.as_ref());
             write_output(&html, args.output.as_deref())?;
         }
         OutputFormat::CycloneDX => {
@@ -347,7 +357,7 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
         let timestamp = scan_time.format("%Y%m%d_%H%M%S");
         let json_filename = format!("{}_{}.json", image_slug, timestamp);
         let json_path = output_dir.join(&json_filename);
-        let json_data = report::format_json(&scan_result, &summary)?;
+        let json_data = report::format_json(&scan_result, &summary, policy_eval.as_ref())?;
         std::fs::write(&json_path, &json_data)?;
         eprintln!(
             "{}",
@@ -355,7 +365,7 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
         );
         let html_filename = format!("{}_{}.html", image_slug, timestamp);
         let html_path = output_dir.join(&html_filename);
-        let html = report::format_html(&scan_result, &summary, &suggestions);
+        let html = report::format_html(&scan_result, &summary, &suggestions, policy_eval.as_ref());
         std::fs::write(&html_path, &html)?;
         eprintln!(
             "{}",
@@ -365,8 +375,19 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
 
     let should_fail = report::check_severity_threshold(&vulnerabilities, effective_threshold.as_ref());
 
+    let policy_rejected = policy_eval.as_ref().map_or(false, |pe| {
+        pe.result == policy::OverallPolicyResult::Rejected
+    });
+
     if !quiet {
-        if should_fail {
+        if policy_rejected {
+            eprintln!(
+                "\n{}",
+                "🛡️  POLICY REJECTED: Image does not pass admission policy"
+                    .red()
+                    .bold()
+            );
+        } else if should_fail {
             eprintln!(
                 "\n{}",
                 "❌ SCAN FAILED: Vulnerabilities exceed severity threshold"
@@ -383,7 +404,13 @@ async fn run_scan(args: ScanArgs, cache_dir: PathBuf, quiet: bool) -> anyhow::Re
 
     let _ = std::fs::remove_dir_all(&work_dir);
 
-    Ok(if should_fail { 1 } else { 0 })
+    if policy_rejected {
+        Ok(2)
+    } else if should_fail {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
 }
 
 async fn run_sbom(args: SbomArgs, cache_dir: PathBuf) -> anyhow::Result<()> {

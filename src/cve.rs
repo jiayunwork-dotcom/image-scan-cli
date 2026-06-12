@@ -247,6 +247,10 @@ impl CveDatabase {
             .take(5)
             .collect();
 
+        let published_date = osv.published.as_ref().and_then(|s| {
+            chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+
         Some(Vulnerability {
             cve_id: normalize_cve_id(&osv.id, ecosystem),
             cvss_v3_score: cvss_v3,
@@ -258,6 +262,7 @@ impl CveDatabase {
             package_version: pkg.version.clone(),
             package_manager: pkg.package_manager.clone(),
             references,
+            published_date,
         })
     }
 }

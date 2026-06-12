@@ -6,5 +6,6 @@ pub mod packages;
 pub mod cve;
 pub mod sbom;
 pub mod report;
+pub mod policy;
 
 pub use types::*;

@@ -97,6 +97,8 @@ pub struct Vulnerability {
     pub package_version: String,
     pub package_manager: PackageManager,
     pub references: Vec<String>,
+    #[serde(default)]
+    pub published_date: Option<DateTime<Utc>>,
 }
 
 impl Vulnerability {
