@@ -598,9 +598,9 @@ pub fn format_html(
     suggestions: &[FixSuggestion],
     policy_eval: Option<&PolicyEvaluationResult>,
 ) -> String {
-    let vulns_json = serde_json::to_string(&result.vulnerabilities).unwrap_or_default();
-    let packages_json = serde_json::to_string(&result.packages).unwrap_or_default();
-    let suggestions_json = serde_json::to_string(suggestions).unwrap_or_default();
+    let vulns_json = sanitize_json_for_script(serde_json::to_string(&result.vulnerabilities).unwrap_or_default());
+    let packages_json = sanitize_json_for_script(serde_json::to_string(&result.packages).unwrap_or_default());
+    let suggestions_json = sanitize_json_for_script(serde_json::to_string(suggestions).unwrap_or_default());
 
     let cr = summary.critical_count;
     let hi = summary.high_count;
@@ -1138,4 +1138,8 @@ fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&#39;")
+}
+
+fn sanitize_json_for_script(json: String) -> String {
+    json.replace("</", "<\\/")
 }
