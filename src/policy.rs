@@ -1,4 +1,4 @@
-use crate::types::{LayerInfo, Package, Severity, Vulnerability};
+use crate::types::{LayerInfo, Package, PackageManager, Severity, Vulnerability};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -253,7 +253,7 @@ pub fn evaluate_policy(
         rule_results.push(result);
     }
 
-    let result = determine_overall_result(&rule_results);
+    let result = determine_overall_result(&rule_results, &policy.fail_action);
 
     PolicyEvaluationResult {
         policy_name: policy.policy_name.clone(),
@@ -296,20 +296,20 @@ fn evaluate_rule(
     }
 }
 
-fn determine_overall_result(rule_results: &[RuleEvaluationResult]) -> OverallPolicyResult {
+fn determine_overall_result(rule_results: &[RuleEvaluationResult], fail_action: &FailAction) -> OverallPolicyResult {
     let has_error_fail = rule_results
         .iter()
         .any(|r| r.status == RuleStatus::Fail && r.severity == RuleSeverity::Error);
 
-    if has_error_fail {
+    if has_error_fail && fail_action == &FailAction::Block {
         return OverallPolicyResult::Rejected;
     }
 
-    let has_warning_fail = rule_results
+    let has_fail = rule_results
         .iter()
-        .any(|r| r.status == RuleStatus::Fail && r.severity == RuleSeverity::Warning);
+        .any(|r| r.status == RuleStatus::Fail);
 
-    if has_warning_fail {
+    if has_fail {
         return OverallPolicyResult::PassedWithWarnings;
     }
 
@@ -340,7 +340,7 @@ fn eval_vuln_severity_threshold(
             let offending: Vec<String> = vulns
                 .iter()
                 .filter(|v| v.severity == Severity::Critical)
-                .map(|v| format!("{} ({}@{})", v.cve_id, v.package_name, v.package_version))
+                .map(|v| format!("{} ({}@{}) - {}", v.cve_id, v.package_name, v.package_version, v.description))
                 .collect();
             violations.push(format!(
                 "Critical vulnerabilities: {} (max allowed: {}): {}",
@@ -356,7 +356,7 @@ fn eval_vuln_severity_threshold(
             let offending: Vec<String> = vulns
                 .iter()
                 .filter(|v| v.severity == Severity::High)
-                .map(|v| format!("{} ({}@{})", v.cve_id, v.package_name, v.package_version))
+                .map(|v| format!("{} ({}@{}) - {}", v.cve_id, v.package_name, v.package_version, v.description))
                 .collect();
             violations.push(format!(
                 "High vulnerabilities: {} (max allowed: {}): {}",
@@ -372,7 +372,7 @@ fn eval_vuln_severity_threshold(
             let offending: Vec<String> = vulns
                 .iter()
                 .filter(|v| v.severity == Severity::Medium)
-                .map(|v| format!("{} ({}@{})", v.cve_id, v.package_name, v.package_version))
+                .map(|v| format!("{} ({}@{}) - {}", v.cve_id, v.package_name, v.package_version, v.description))
                 .collect();
             violations.push(format!(
                 "Medium vulnerabilities: {} (max allowed: {}): {}",
@@ -400,8 +400,8 @@ fn eval_vuln_age_limit(cond: &RuleCondition, vulns: &[Vulnerability]) -> Vec<Str
             let days = (now - pub_date).num_days();
             if days > max_days as i64 {
                 violations.push(format!(
-                    "{} ({}@{}) published {} days ago without fix (max: {})",
-                    v.cve_id, v.package_name, v.package_version, days, max_days
+                    "{} ({}@{}) published {} days ago without fix (max: {}): {}",
+                    v.cve_id, v.package_name, v.package_version, days, max_days, v.description
                 ));
             }
         }
@@ -443,7 +443,7 @@ fn eval_package_version_pin(cond: &RuleCondition, packages: &[Package]) -> Vec<S
     for pin in pins {
         for pkg in packages {
             if pkg.name == pin.name {
-                if !version_matches_range(&pkg.version, &pin.allowed_versions) {
+                if !version_matches_range(&pkg.version, &pin.allowed_versions, &pkg.package_manager) {
                     violations.push(format!(
                         "{}@{} does not match allowed versions '{}'",
                         pkg.name, pkg.version, pin.allowed_versions
@@ -462,7 +462,7 @@ fn eval_license_whitelist(cond: &RuleCondition, packages: &[Package]) -> Vec<Str
         None => return Vec::new(),
     };
 
-    let allowed_lower: Vec<String> = allowed.iter().map(|l| l.to_lowercase()).collect();
+    let allowed_lower: Vec<String> = allowed.iter().map(|l| normalize_license_token(l)).collect();
 
     let mut violations = Vec::new();
 
@@ -471,11 +471,10 @@ fn eval_license_whitelist(cond: &RuleCondition, packages: &[Package]) -> Vec<Str
             if lic.is_empty() {
                 continue;
             }
-            let lic_lower = lic.to_lowercase();
-            let is_allowed = allowed_lower.iter().any(|a| {
-                lic_lower == *a
-                    || lic_lower.contains(&format!(" {}", a))
-                    || lic_lower.starts_with(a)
+            let tokens = split_license_tokens(lic);
+            let is_allowed = tokens.iter().any(|token| {
+                let norm = normalize_license_token(token);
+                allowed_lower.iter().any(|a| a == &norm)
             });
             if !is_allowed {
                 violations.push(format!(
@@ -487,6 +486,81 @@ fn eval_license_whitelist(cond: &RuleCondition, packages: &[Package]) -> Vec<Str
     }
 
     violations
+}
+
+fn split_license_tokens(license: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+
+    let chars: Vec<char> = license.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+
+        if c.is_whitespace() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            i += 1;
+            continue;
+        }
+
+        if c == '/' || c == ',' || c == ';' || c == '(' || c == ')' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            i += 1;
+            continue;
+        }
+
+        let remaining: String = chars[i..].iter().collect();
+        let lower_remaining = remaining.to_lowercase();
+        if lower_remaining.starts_with("or ") || lower_remaining == "or" {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            i += 2;
+            continue;
+        }
+        if lower_remaining.starts_with("and ") || lower_remaining == "and" {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            i += 3;
+            continue;
+        }
+        if lower_remaining.starts_with("with ") || lower_remaining == "with" {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            i += 4;
+            continue;
+        }
+
+        current.push(c);
+        i += 1;
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens.retain(|t| !t.is_empty());
+    tokens
+}
+
+fn normalize_license_token(token: &str) -> String {
+    let mut s = token.to_lowercase();
+    s = s.trim_end_matches('-').to_string();
+    s = s.trim_end_matches('+').to_string();
+    let suffixes = ["license", "licence", "public"];
+    for suffix in &suffixes {
+        if s.ends_with(suffix) {
+            s = s[..s.len() - suffix.len()].to_string();
+            s = s.trim_end_matches(['-', '_', ' ']).to_string();
+        }
+    }
+    s.trim().to_string()
 }
 
 fn eval_max_total_vulns(cond: &RuleCondition, vulns: &[Vulnerability]) -> Vec<String> {
@@ -574,15 +648,105 @@ fn glob_to_regex(pattern: &str) -> String {
     result
 }
 
-fn version_matches_range(version: &str, range_expr: &str) -> bool {
-    let normalized = normalize_version_for_semver(version);
-    if let Ok(v) = semver::Version::parse(&normalized) {
-        let req_str = range_expr.replace(' ', "");
-        if let Ok(req) = semver::VersionReq::parse(&req_str) {
-            return req.matches(&v);
+fn version_matches_range(version: &str, range_expr: &str, pm: &PackageManager) -> bool {
+    let constraints = match parse_version_range(range_expr) {
+        Some(c) => c,
+        None => return false,
+    };
+
+    let is_semver_eco = matches!(pm, PackageManager::Npm | PackageManager::Cargo | PackageManager::Go | PackageManager::Pip);
+
+    if is_semver_eco {
+        if let Ok(v) = semver::Version::parse(&normalize_version_for_semver(version)) {
+            let req_str = range_expr.replace(' ', "");
+            if let Ok(req) = semver::VersionReq::parse(&req_str) {
+                return req.matches(&v);
+            }
         }
     }
+
+    for constraint in constraints {
+        match constraint {
+            RangeConstraint::Exact(ver) => {
+                if crate::version::compare_versions(version, &ver, pm) != std::cmp::Ordering::Equal {
+                    return false;
+                }
+            }
+            RangeConstraint::Gte(ver) => {
+                if crate::version::compare_versions(version, &ver, pm) == std::cmp::Ordering::Less {
+                    return false;
+                }
+            }
+            RangeConstraint::Gt(ver) => {
+                if crate::version::compare_versions(version, &ver, pm) != std::cmp::Ordering::Greater {
+                    return false;
+                }
+            }
+            RangeConstraint::Lte(ver) => {
+                if crate::version::compare_versions(version, &ver, pm) == std::cmp::Ordering::Greater {
+                    return false;
+                }
+            }
+            RangeConstraint::Lt(ver) => {
+                if crate::version::compare_versions(version, &ver, pm) != std::cmp::Ordering::Less {
+                    return false;
+                }
+            }
+        }
+    }
+
     true
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum RangeConstraint {
+    Exact(String),
+    Gte(String),
+    Gt(String),
+    Lte(String),
+    Lt(String),
+}
+
+fn parse_version_range(range_expr: &str) -> Option<Vec<RangeConstraint>> {
+    let mut constraints = Vec::new();
+    let parts: Vec<&str> = range_expr.split(',').collect();
+
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+
+        if part.starts_with(">=") {
+            let ver = part[2..].trim().to_string();
+            if ver.is_empty() { return None; }
+            constraints.push(RangeConstraint::Gte(ver));
+        } else if part.starts_with("<=") {
+            let ver = part[2..].trim().to_string();
+            if ver.is_empty() { return None; }
+            constraints.push(RangeConstraint::Lte(ver));
+        } else if part.starts_with(">") {
+            let ver = part[1..].trim().to_string();
+            if ver.is_empty() { return None; }
+            constraints.push(RangeConstraint::Gt(ver));
+        } else if part.starts_with("<") {
+            let ver = part[1..].trim().to_string();
+            if ver.is_empty() { return None; }
+            constraints.push(RangeConstraint::Lt(ver));
+        } else if part.starts_with("=") {
+            let ver = part[1..].trim().to_string();
+            if ver.is_empty() { return None; }
+            constraints.push(RangeConstraint::Exact(ver));
+        } else {
+            constraints.push(RangeConstraint::Exact(part.to_string()));
+        }
+    }
+
+    if constraints.is_empty() {
+        None
+    } else {
+        Some(constraints)
+    }
 }
 
 fn normalize_version_for_semver(v: &str) -> String {
