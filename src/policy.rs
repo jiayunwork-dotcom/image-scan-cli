@@ -13,6 +13,10 @@ pub struct AdmissionPolicy {
     #[serde(default = "default_fail_action")]
     pub fail_action: FailAction,
     pub rules: Vec<Rule>,
+    #[serde(default)]
+    pub rule_groups: Option<Vec<RuleGroup>>,
+    #[serde(default)]
+    pub condition_expr: Option<String>,
 }
 
 fn default_fail_action() -> FailAction {
@@ -82,6 +86,51 @@ pub struct VersionPin {
     pub allowed_versions: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleGroup {
+    pub id: String,
+    pub name: String,
+    pub operator: GroupOperator,
+    pub rule_ids: Vec<String>,
+    pub action: GroupAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum GroupOperator {
+    All,
+    Any,
+    None,
+}
+
+impl GroupOperator {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GroupOperator::All => "all",
+            GroupOperator::Any => "any",
+            GroupOperator::None => "none",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupAction {
+    Reject,
+    Warn,
+    Pass,
+}
+
+impl GroupAction {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GroupAction::Reject => "reject",
+            GroupAction::Warn => "warn",
+            GroupAction::Pass => "pass",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum OverallPolicyResult {
     Approved,
@@ -105,6 +154,25 @@ pub struct PolicyEvaluationResult {
     pub policy_version: String,
     pub result: OverallPolicyResult,
     pub rules: Vec<RuleEvaluationResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub groups: Option<Vec<GroupEvaluationResult>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expression: Option<ExprEvaluationResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GroupEvaluationResult {
+    pub id: String,
+    pub name: String,
+    pub operator: String,
+    pub triggered: bool,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExprEvaluationResult {
+    pub expression: String,
+    pub evaluated_result: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +212,13 @@ fn validate_admission_policy(policy: &AdmissionPolicy) -> anyhow::Result<()> {
         anyhow::bail!("version is required and cannot be empty");
     }
 
+    if policy.rule_groups.is_some() && policy.condition_expr.is_some() {
+        anyhow::bail!(
+            "rule_groups and condition_expr are mutually exclusive: \
+             please specify only one of them, not both"
+        );
+    }
+
     let mut ids: HashSet<String> = HashSet::new();
     for rule in &policy.rules {
         if rule.id.is_empty() {
@@ -160,6 +235,61 @@ fn validate_admission_policy(policy: &AdmissionPolicy) -> anyhow::Result<()> {
         validate_condition(&rule.condition, &rule.id)?;
     }
 
+    if let Some(groups) = &policy.rule_groups {
+        validate_rule_groups(groups, &ids)?;
+    }
+
+    if let Some(expr) = &policy.condition_expr {
+        validate_condition_expr(expr, &ids)?;
+    }
+
+    Ok(())
+}
+
+fn validate_rule_groups(groups: &[RuleGroup], rule_ids: &HashSet<String>) -> anyhow::Result<()> {
+    let mut group_ids: HashSet<String> = HashSet::new();
+    for group in groups {
+        if group.id.is_empty() {
+            anyhow::bail!("rule_group id is required and cannot be empty");
+        }
+        if group_ids.contains(&group.id) {
+            anyhow::bail!("duplicate rule_group id: {}", group.id);
+        }
+        group_ids.insert(group.id.clone());
+
+        if group.name.is_empty() {
+            anyhow::bail!("rule_group '{}' name is required", group.id);
+        }
+        if group.rule_ids.is_empty() {
+            anyhow::bail!(
+                "rule_group '{}' rule_ids must contain at least one rule reference",
+                group.id
+            );
+        }
+        for rid in &group.rule_ids {
+            if !rule_ids.contains(rid) {
+                anyhow::bail!(
+                    "rule_group '{}' references unknown rule id '{}'",
+                    group.id,
+                    rid
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_condition_expr(expr: &str, rule_ids: &HashSet<String>) -> anyhow::Result<()> {
+    let referenced = extract_expr_rule_ids(expr);
+    for rid in &referenced {
+        if !rule_ids.contains(rid) {
+            anyhow::bail!(
+                "condition_expr references unknown rule id '{}'",
+                rid
+            );
+        }
+    }
+    parse_condition_expr(expr)?;
     Ok(())
 }
 
@@ -253,13 +383,99 @@ pub fn evaluate_policy(
         rule_results.push(result);
     }
 
-    let result = determine_overall_result(&rule_results, &policy.fail_action);
+    let rule_status_map: std::collections::HashMap<&str, bool> = rule_results
+        .iter()
+        .map(|r| (r.id.as_str(), r.status == RuleStatus::Fail))
+        .collect();
+
+    let (result, groups_result, expr_result) =
+        if let Some(groups) = &policy.rule_groups {
+            let group_evals = evaluate_rule_groups(groups, &rule_status_map);
+            let overall = determine_overall_from_groups(&group_evals);
+            (overall, Some(group_evals), None)
+        } else if let Some(expr) = &policy.condition_expr {
+            let eval = evaluate_condition_expr(expr, &rule_status_map);
+            let overall = if eval.evaluated_result {
+                OverallPolicyResult::Rejected
+            } else {
+                OverallPolicyResult::Approved
+            };
+            (overall, None, Some(eval))
+        } else {
+            let overall = determine_overall_result(&rule_results, &policy.fail_action);
+            (overall, None, None)
+        };
 
     PolicyEvaluationResult {
         policy_name: policy.policy_name.clone(),
         policy_version: policy.version.clone(),
         result,
         rules: rule_results,
+        groups: groups_result,
+        expression: expr_result,
+    }
+}
+
+fn evaluate_rule_groups(
+    groups: &[RuleGroup],
+    rule_status_map: &std::collections::HashMap<&str, bool>,
+) -> Vec<GroupEvaluationResult> {
+    groups
+        .iter()
+        .map(|g| {
+            let fail_count = g
+                .rule_ids
+                .iter()
+                .filter(|rid| rule_status_map.get(rid.as_str()).copied().unwrap_or(false))
+                .count();
+            let total = g.rule_ids.len();
+
+            let triggered = match g.operator {
+                GroupOperator::All => fail_count == total,
+                GroupOperator::Any => fail_count > 0,
+                GroupOperator::None => fail_count == 0,
+            };
+
+            GroupEvaluationResult {
+                id: g.id.clone(),
+                name: g.name.clone(),
+                operator: g.operator.as_str().to_string(),
+                triggered,
+                action: g.action.as_str().to_string(),
+            }
+        })
+        .collect()
+}
+
+fn determine_overall_from_groups(group_evals: &[GroupEvaluationResult]) -> OverallPolicyResult {
+    let has_reject = group_evals.iter().any(|g| g.triggered && g.action == "reject");
+    let has_warn = group_evals.iter().any(|g| g.triggered && g.action == "warn");
+
+    if has_reject {
+        OverallPolicyResult::Rejected
+    } else if has_warn {
+        OverallPolicyResult::PassedWithWarnings
+    } else {
+        OverallPolicyResult::Approved
+    }
+}
+
+fn evaluate_condition_expr(
+    expr: &str,
+    rule_status_map: &std::collections::HashMap<&str, bool>,
+) -> ExprEvaluationResult {
+    match parse_condition_expr(expr) {
+        Ok(ast) => {
+            let result = eval_expr_ast(&ast, rule_status_map);
+            ExprEvaluationResult {
+                expression: expr.to_string(),
+                evaluated_result: result,
+            }
+        }
+        Err(_) => ExprEvaluationResult {
+            expression: expr.to_string(),
+            evaluated_result: false,
+        },
     }
 }
 
@@ -760,5 +976,175 @@ fn normalize_version_for_semver(v: &str) -> String {
             padded.push_str(".0");
         }
         padded
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ExprNode {
+    Identifier(String),
+    Not(Box<ExprNode>),
+    And(Box<ExprNode>, Box<ExprNode>),
+    Or(Box<ExprNode>, Box<ExprNode>),
+}
+
+fn extract_expr_rule_ids(expr: &str) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    let chars: Vec<char> = expr.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c.is_alphanumeric() || c == '-' || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '-' || chars[i] == '_') {
+                i += 1;
+            }
+            let token: String = chars[start..i].iter().collect();
+            let upper = token.to_uppercase();
+            if upper != "AND" && upper != "OR" && upper != "NOT" {
+                ids.insert(token);
+            }
+        } else {
+            i += 1;
+        }
+    }
+    ids
+}
+
+fn parse_condition_expr(expr: &str) -> anyhow::Result<ExprNode> {
+    let chars: Vec<char> = expr.chars().collect();
+    let mut pos = 0;
+    let node = parse_or(&chars, &mut pos)?;
+    skip_whitespace(&chars, &mut pos);
+    if pos < chars.len() {
+        anyhow::bail!(
+            "unexpected character at position {} in expression: '{}'",
+            pos,
+            expr
+        );
+    }
+    Ok(node)
+}
+
+fn skip_whitespace(chars: &[char], pos: &mut usize) {
+    while *pos < chars.len() && chars[*pos].is_whitespace() {
+        *pos += 1;
+    }
+}
+
+fn parse_or(chars: &[char], pos: &mut usize) -> anyhow::Result<ExprNode> {
+    let mut left = parse_and(chars, pos)?;
+    loop {
+        skip_whitespace(chars, pos);
+        if let Some(node) = try_parse_keyword(chars, pos, "OR") {
+            left = ExprNode::Or(Box::new(left), Box::new(node?));
+        } else {
+            break;
+        }
+    }
+    Ok(left)
+}
+
+fn parse_and(chars: &[char], pos: &mut usize) -> anyhow::Result<ExprNode> {
+    let mut left = parse_not(chars, pos)?;
+    loop {
+        skip_whitespace(chars, pos);
+        if let Some(node) = try_parse_keyword(chars, pos, "AND") {
+            left = ExprNode::And(Box::new(left), Box::new(node?));
+        } else {
+            break;
+        }
+    }
+    Ok(left)
+}
+
+fn parse_not(chars: &[char], pos: &mut usize) -> anyhow::Result<ExprNode> {
+    skip_whitespace(chars, pos);
+    if let Some(node) = try_parse_keyword(chars, pos, "NOT") {
+        return Ok(ExprNode::Not(Box::new(node?)));
+    }
+    parse_primary(chars, pos)
+}
+
+fn parse_primary(chars: &[char], pos: &mut usize) -> anyhow::Result<ExprNode> {
+    skip_whitespace(chars, pos);
+    if *pos >= chars.len() {
+        anyhow::bail!("unexpected end of expression");
+    }
+
+    if chars[*pos] == '(' {
+        *pos += 1;
+        let node = parse_or(chars, pos)?;
+        skip_whitespace(chars, pos);
+        if *pos >= chars.len() || chars[*pos] != ')' {
+            anyhow::bail!("expected ')' at position {}", *pos);
+        }
+        *pos += 1;
+        return Ok(node);
+    }
+
+    if chars[*pos].is_alphanumeric() || chars[*pos] == '-' || chars[*pos] == '_' {
+        let start = *pos;
+        while *pos < chars.len() && (chars[*pos].is_alphanumeric() || chars[*pos] == '-' || chars[*pos] == '_') {
+            *pos += 1;
+        }
+        let token: String = chars[start..*pos].iter().collect();
+        let upper = token.to_uppercase();
+        if upper == "AND" || upper == "OR" || upper == "NOT" {
+            anyhow::bail!("unexpected keyword '{}' used as identifier", token);
+        }
+        return Ok(ExprNode::Identifier(token));
+    }
+
+    anyhow::bail!("unexpected character '{}' at position {}", chars[*pos], *pos)
+}
+
+fn try_parse_keyword(
+    chars: &[char],
+    pos: &mut usize,
+    keyword: &str,
+) -> Option<anyhow::Result<ExprNode>> {
+    let saved = *pos;
+    let kw_chars: Vec<char> = keyword.chars().collect();
+    if *pos + kw_chars.len() > chars.len() {
+        return None;
+    }
+    let slice: String = chars[*pos..*pos + kw_chars.len()].iter().collect();
+    if slice.to_uppercase() != keyword {
+        return None;
+    }
+    let after_kw = *pos + kw_chars.len();
+    if after_kw < chars.len() {
+        let next = chars[after_kw];
+        if next.is_alphanumeric() || next == '-' || next == '_' {
+            return None;
+        }
+    }
+    *pos = after_kw;
+    skip_whitespace(chars, pos);
+    match parse_not(chars, pos) {
+        Ok(node) => Some(Ok(node)),
+        Err(e) => {
+            *pos = saved;
+            Some(Err(e))
+        }
+    }
+}
+
+fn eval_expr_ast(
+    node: &ExprNode,
+    rule_status_map: &std::collections::HashMap<&str, bool>,
+) -> bool {
+    match node {
+        ExprNode::Identifier(id) => rule_status_map
+            .get(id.as_str())
+            .copied()
+            .unwrap_or(false),
+        ExprNode::Not(inner) => !eval_expr_ast(inner, rule_status_map),
+        ExprNode::And(left, right) => {
+            eval_expr_ast(left, rule_status_map) && eval_expr_ast(right, rule_status_map)
+        }
+        ExprNode::Or(left, right) => {
+            eval_expr_ast(left, rule_status_map) || eval_expr_ast(right, rule_status_map)
+        }
     }
 }

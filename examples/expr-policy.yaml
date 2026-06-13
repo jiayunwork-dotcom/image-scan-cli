@@ -1,0 +1,42 @@
+policy_name: "expr-policy"
+version: "1.0"
+description: "Policy using condition_expr to define boolean logic between rules"
+fail_action: block
+
+rules:
+  - id: "max-critical-vulns"
+    name: "Maximum Critical Vulnerabilities"
+    severity: error
+    condition:
+      type: vuln_severity_threshold
+      max_critical: 0
+      max_high: 5
+
+  - id: "vuln-age-limit"
+    name: "Vulnerability Age Limit"
+    severity: error
+    condition:
+      type: vuln_age_limit
+      max_days_since_publish: 90
+
+  - id: "license-whitelist"
+    name: "Allowed Licenses Only"
+    severity: warning
+    condition:
+      type: license_whitelist
+      allowed_licenses:
+        - "MIT"
+        - "Apache-2.0"
+        - "BSD-2-Clause"
+        - "BSD-3-Clause"
+
+  - id: "forbidden-packages"
+    name: "Forbidden Packages"
+    severity: error
+    condition:
+      type: package_blacklist
+      packages:
+        - "telnet*"
+        - "ftp"
+
+condition_expr: "(max-critical-vulns OR vuln-age-limit) AND license-whitelist"

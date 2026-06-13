@@ -302,6 +302,43 @@ fn print_policy_evaluation(eval: &PolicyEvaluationResult) {
             println!("     {}", format!("→ {}", v).dimmed());
         }
     }
+
+    if let Some(groups) = &eval.groups {
+        println!("\n  {}", "Rule Groups:".bold());
+        println!("  {}", "─".repeat(76));
+        for g in groups {
+            let triggered_icon = if g.triggered {
+                "⚠️ TRIGGERED".red()
+            } else {
+                "✓ NOT TRIGGERED".green()
+            };
+            let action_colored = match g.action.as_str() {
+                "reject" => g.action.red(),
+                "warn" => g.action.yellow(),
+                _ => g.action.green(),
+            };
+            println!(
+                "  {} {} [{}] ({}) → {}",
+                triggered_icon,
+                g.name.white(),
+                g.id.cyan(),
+                format!("operator: {}", g.operator).dimmed(),
+                action_colored,
+            );
+        }
+    }
+
+    if let Some(expr) = &eval.expression {
+        println!("\n  {}", "Condition Expression:".bold());
+        println!("  {}", "─".repeat(76));
+        println!("  {:<12} {}", "Expr:".dimmed(), expr.expression.white());
+        let result_icon = if expr.evaluated_result {
+            "⚠️ TRUE → REJECTED".red()
+        } else {
+            "✓ FALSE → APPROVED".green()
+        };
+        println!("  {:<12} {}", "Result:".dimmed(), result_icon);
+    }
 }
 
 fn print_baseline_diff(diff: &BaselineDiff) {
@@ -374,22 +411,47 @@ pub fn format_json(result: &ScanResult, summary: &ScanSummary, policy_eval: Opti
     });
 
     if let Some(pe) = policy_eval {
+        let mut policy_obj = json!({
+            "result": pe.result.as_str(),
+            "policy_name": pe.policy_name,
+            "policy_version": pe.policy_version,
+            "rules": pe.rules.iter().map(|r| json!({
+                "id": r.id,
+                "name": r.name,
+                "status": match r.status {
+                    RuleStatus::Pass => "pass",
+                    RuleStatus::Fail => "fail",
+                },
+                "violations": r.violations,
+            })).collect::<Vec<_>>(),
+        });
+
+        if let Some(groups) = &pe.groups {
+            policy_obj.as_object_mut().unwrap().insert(
+                "groups".to_string(),
+                json!(groups.iter().map(|g| json!({
+                    "id": g.id,
+                    "name": g.name,
+                    "operator": g.operator,
+                    "triggered": g.triggered,
+                    "action": g.action,
+                })).collect::<Vec<_>>()),
+            );
+        }
+
+        if let Some(expr) = &pe.expression {
+            policy_obj.as_object_mut().unwrap().insert(
+                "expression".to_string(),
+                json!({
+                    "expression": expr.expression,
+                    "evaluated_result": expr.evaluated_result,
+                }),
+            );
+        }
+
         output.as_object_mut().unwrap().insert(
             "policy_evaluation".to_string(),
-            json!({
-                "result": pe.result.as_str(),
-                "policy_name": pe.policy_name,
-                "policy_version": pe.policy_version,
-                "rules": pe.rules.iter().map(|r| json!({
-                    "id": r.id,
-                    "name": r.name,
-                    "status": match r.status {
-                        RuleStatus::Pass => "pass",
-                        RuleStatus::Fail => "fail",
-                    },
-                    "violations": r.violations,
-                })).collect::<Vec<_>>(),
-            }),
+            policy_obj,
         );
     }
 
@@ -633,10 +695,43 @@ pub fn format_html(
                 }
                 rules_html.push_str("</div>");
             }
+
+            let mut groups_html = String::new();
+            if let Some(groups) = &pe.groups {
+                groups_html.push_str(r#"<div class="rule-groups-section"><h3>Rule Groups</h3>"#);
+                for g in groups {
+                    let triggered_class = if g.triggered { "triggered" } else { "not-triggered" };
+                    let triggered_text = if g.triggered { "⚠️ TRIGGERED" } else { "✓ NOT TRIGGERED" };
+                    let action_class = match g.action.as_str() {
+                        "reject" => "action-reject",
+                        "warn" => "action-warn",
+                        _ => "action-pass",
+                    };
+                    let escaped_gname = html_escape(&g.name);
+                    let escaped_gid = html_escape(&g.id);
+                    let escaped_operator = html_escape(&g.operator);
+                    let escaped_action = html_escape(&g.action);
+                    groups_html.push_str(&format!(
+                        r#"<div class="rule-group-item {triggered_class}"><span class="{triggered_class}">{triggered_text}</span><span>{escaped_gname}</span><span class="rule-id">[{escaped_gid}]</span><span class="group-operator">operator: {escaped_operator}</span><span class="{action_class}">→ {escaped_action}</span></div>"#
+                    ));
+                }
+                groups_html.push_str("</div>");
+            }
+
+            let mut expr_html = String::new();
+            if let Some(expr) = &pe.expression {
+                let expr_class = if expr.evaluated_result { "triggered" } else { "not-triggered" };
+                let result_text = if expr.evaluated_result { "⚠️ TRUE → REJECTED" } else { "✓ FALSE → APPROVED" };
+                let escaped_expr = html_escape(&expr.expression);
+                expr_html.push_str(&format!(
+                    r#"<div class="expr-section"><h3>Condition Expression</h3><div class="expr-text"><span class="label">Expr:</span> {escaped_expr}</div><div class="expr-result {expr_class}"><span class="label">Result:</span> {result_text}</div></div>"#
+                ));
+            }
+
             let policy_name_esc = html_escape(&pe.policy_name);
             let policy_version_esc = html_escape(&pe.policy_version);
             format!(
-                r#"<div class="policy-card {css_class}"><h2>🛡️ Policy Compliance</h2><div class="policy-meta">{policy_name_esc} (v{policy_version_esc})</div><div class="policy-result {css_class}">{result_text}</div>{rules_html}</div>"#
+                r#"<div class="policy-card {css_class}"><h2>🛡️ Policy Compliance</h2><div class="policy-meta">{policy_name_esc} (v{policy_version_esc})</div><div class="policy-result {css_class}">{result_text}</div>{rules_html}{groups_html}{expr_html}</div>"#
             )
         }
         None => String::new(),
@@ -729,6 +824,25 @@ tbody tr:hover{{background:#1e293b80}}
 .policy-rule .rule-header .fail{{color:#f87171}}
 .policy-rule .rule-id{{color:#94a3b8;font-size:12px}}
 .policy-rule .violation{{color:#fca5a5;font-size:12px;margin-top:4px;padding-left:24px}}
+.rule-groups-section{{margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1)}}
+.rule-groups-section h3{{font-size:15px;font-weight:600;margin-bottom:10px;color:#e2e8f0}}
+.rule-group-item{{display:flex;align-items:center;gap:8px;padding:8px 14px;background:rgba(0,0,0,.25);border-radius:8px;margin-bottom:6px;font-size:14px;font-weight:600;flex-wrap:wrap}}
+.rule-group-item.triggered{{border-left:3px solid #ef4444}}
+.rule-group-item.not-triggered{{border-left:3px solid #22c55e}}
+.rule-group-item .triggered{{color:#f87171}}
+.rule-group-item .not-triggered{{color:#4ade80}}
+.rule-group-item .group-operator{{color:#94a3b8;font-size:12px;font-weight:400}}
+.rule-group-item .action-reject{{color:#f87171}}
+.rule-group-item .action-warn{{color:#fbbf24}}
+.rule-group-item .action-pass{{color:#4ade80}}
+.expr-section{{margin-top:16px;padding-top:12px;border-top:1px solid rgba(255,255,255,.1)}}
+.expr-section h3{{font-size:15px;font-weight:600;margin-bottom:10px;color:#e2e8f0}}
+.expr-text{{padding:8px 14px;background:rgba(0,0,0,.25);border-radius:8px;margin-bottom:8px;font-size:14px}}
+.expr-text .label{{color:#94a3b8;font-size:12px}}
+.expr-result{{padding:8px 14px;border-radius:8px;font-size:14px;font-weight:600}}
+.expr-result.triggered{{background:rgba(239,68,68,.15);color:#f87171;border-left:3px solid #ef4444}}
+.expr-result.not-triggered{{background:rgba(34,197,94,.15);color:#4ade80;border-left:3px solid #22c55e}}
+.expr-result .label{{color:#94a3b8;font-size:12px;font-weight:400}}
 footer{{text-align:center;padding:20px;color:#475569;font-size:12px}}
 </style>
 </head>

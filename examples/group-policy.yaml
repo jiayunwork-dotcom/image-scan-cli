@@ -1,0 +1,82 @@
+policy_name: "group-policy"
+version: "1.0"
+description: "Policy using rule_groups to define custom combination logic"
+fail_action: block
+
+rules:
+  - id: "max-critical-vulns"
+    name: "Maximum Critical Vulnerabilities"
+    severity: error
+    condition:
+      type: vuln_severity_threshold
+      max_critical: 0
+      max_high: 5
+      max_medium: 20
+
+  - id: "vuln-age-limit"
+    name: "Vulnerability Age Limit"
+    severity: error
+    condition:
+      type: vuln_age_limit
+      max_days_since_publish: 90
+
+  - id: "forbidden-packages"
+    name: "Forbidden Packages"
+    severity: error
+    condition:
+      type: package_blacklist
+      packages:
+        - "telnet*"
+        - "ftp"
+        - "rsh"
+
+  - id: "license-whitelist"
+    name: "Allowed Licenses Only"
+    severity: warning
+    condition:
+      type: license_whitelist
+      allowed_licenses:
+        - "MIT"
+        - "Apache-2.0"
+        - "BSD-2-Clause"
+        - "BSD-3-Clause"
+        - "ISC"
+
+  - id: "max-total-vulns"
+    name: "Maximum Total Vulnerabilities"
+    severity: error
+    condition:
+      type: max_total_vulns
+      limit: 50
+
+  - id: "layer-count-limit"
+    name: "Layer Count Limit"
+    severity: info
+    condition:
+      type: layer_count_limit
+      max_layers: 30
+
+rule_groups:
+  - id: "critical-vuln-group"
+    name: "Critical Vulnerability Check"
+    operator: any
+    rule_ids:
+      - "max-critical-vulns"
+      - "vuln-age-limit"
+    action: reject
+
+  - id: "compliance-group"
+    name: "Compliance Requirements"
+    operator: all
+    rule_ids:
+      - "forbidden-packages"
+      - "license-whitelist"
+    action: reject
+
+  - id: "quality-group"
+    name: "Image Quality"
+    operator: any
+    rule_ids:
+      - "max-total-vulns"
+      - "layer-count-limit"
+    action: warn
